@@ -1,53 +1,114 @@
-import { useEffect } from "react";
-import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "./components/ui/sonner";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import Sales from "./pages/Sales";
+import Inventory from "./pages/Inventory";
+import Products from "./pages/Products";
+import Suppliers from "./pages/Suppliers";
+import Purchases from "./pages/Purchases";
+import Reports from "./pages/Reports";
+import Users from "./pages/Users";
+import Cafeterias from "./pages/Cafeterias";
+import Layout from "./components/Layout";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
+const ProtectedRoute = ({ children, allowedRoles }) => {
+  const { user, loading } = useAuth();
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0D0D0D] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#708238]"></div>
+      </div>
+    );
+  }
+  
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  
+  return children;
 };
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          
+          <Route path="/dashboard" element={
+            <ProtectedRoute>
+              <Layout><Dashboard /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/sales" element={
+            <ProtectedRoute>
+              <Layout><Sales /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/inventory" element={
+            <ProtectedRoute>
+              <Layout><Inventory /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/products" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Products /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/suppliers" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Suppliers /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/purchases" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Purchases /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/reports" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Reports /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/users" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><Users /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/cafeterias" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><Cafeterias /></Layout>
+            </ProtectedRoute>
+          } />
         </Routes>
+        <Toaster 
+          position="top-right" 
+          toastOptions={{
+            style: {
+              background: '#161616',
+              border: '1px solid #27272A',
+              color: '#EDEDED',
+            },
+          }}
+        />
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 

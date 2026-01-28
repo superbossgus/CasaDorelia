@@ -1,0 +1,195 @@
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import { Button } from "./ui/button";
+import { ScrollArea } from "./ui/scroll-area";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import {
+  LayoutDashboard,
+  ShoppingCart,
+  Package,
+  Coffee,
+  Truck,
+  FileText,
+  Users,
+  Store,
+  Menu,
+  X,
+  LogOut,
+  User,
+  ChevronDown,
+  Receipt,
+} from "lucide-react";
+
+const Layout = ({ children }) => {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, logout, isAdmin, canManage } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login");
+  };
+
+  const navItems = [
+    { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin", "gerente", "cajero"] },
+    { path: "/sales", label: "Ventas", icon: ShoppingCart, roles: ["admin", "gerente", "cajero"] },
+    { path: "/inventory", label: "Inventario", icon: Package, roles: ["admin", "gerente", "cajero"] },
+    { path: "/products", label: "Productos", icon: Coffee, roles: ["admin", "gerente"] },
+    { path: "/suppliers", label: "Proveedores", icon: Truck, roles: ["admin", "gerente"] },
+    { path: "/purchases", label: "Compras", icon: Receipt, roles: ["admin", "gerente"] },
+    { path: "/reports", label: "Reportes", icon: FileText, roles: ["admin", "gerente"] },
+    { path: "/cafeterias", label: "Cafeterías", icon: Store, roles: ["admin"] },
+    { path: "/users", label: "Usuarios", icon: Users, roles: ["admin"] },
+  ];
+
+  const filteredNavItems = navItems.filter(item => item.roles.includes(user?.role));
+
+  const NavLink = ({ item, mobile = false }) => {
+    const isActive = location.pathname === item.path;
+    const Icon = item.icon;
+    
+    return (
+      <Link
+        to={item.path}
+        onClick={() => mobile && setSidebarOpen(false)}
+        data-testid={`nav-${item.path.slice(1)}`}
+        className={`
+          flex items-center gap-3 px-4 py-3 rounded-md transition-all duration-200
+          ${isActive 
+            ? "bg-[#708238]/20 text-[#708238] border-l-3 border-[#708238]" 
+            : "text-[#A1A1AA] hover:bg-[#708238]/10 hover:text-white hover:pl-5"
+          }
+        `}
+      >
+        <Icon className="h-5 w-5" />
+        <span className="font-medium">{item.label}</span>
+      </Link>
+    );
+  };
+
+  const roleLabels = {
+    admin: "Administrador",
+    gerente: "Gerente",
+    cajero: "Cajero"
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0D0D0D]">
+      {/* Mobile Header */}
+      <header className="lg:hidden fixed top-0 left-0 right-0 z-50 glass border-b border-[#27272A]">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Coffee className="h-6 w-6 text-[#708238]" />
+            <span className="font-manrope font-bold text-white">CaféControl</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            data-testid="mobile-menu-toggle"
+            className="text-white hover:bg-[#27272A]"
+          >
+            {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+          </Button>
+        </div>
+      </header>
+
+      {/* Mobile Sidebar Overlay */}
+      {sidebarOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`
+        fixed top-0 left-0 z-50 h-full w-64 bg-[#161616] border-r border-[#27272A]
+        transform transition-transform duration-300 ease-in-out
+        lg:transform-none lg:translate-x-0
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+      `}>
+        <div className="flex flex-col h-full">
+          {/* Logo */}
+          <div className="flex items-center gap-3 px-6 py-5 border-b border-[#27272A]">
+            <Coffee className="h-8 w-8 text-[#708238]" />
+            <div>
+              <h1 className="font-manrope font-bold text-xl text-white">CaféControl</h1>
+              <p className="text-xs text-[#71717A]">Sistema de Gestión</p>
+            </div>
+          </div>
+
+          {/* Navigation */}
+          <ScrollArea className="flex-1 py-4">
+            <nav className="px-3 space-y-1">
+              {filteredNavItems.map((item) => (
+                <NavLink key={item.path} item={item} mobile={sidebarOpen} />
+              ))}
+            </nav>
+          </ScrollArea>
+
+          {/* User Section */}
+          <div className="border-t border-[#27272A] p-4">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  data-testid="user-menu-trigger"
+                  className="w-full justify-between text-left hover:bg-[#27272A] p-3 h-auto"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-full bg-[#708238]/20 flex items-center justify-center">
+                      <User className="h-5 w-5 text-[#708238]" />
+                    </div>
+                    <div className="flex flex-col items-start">
+                      <span className="text-sm font-medium text-white truncate max-w-[120px]">
+                        {user?.name}
+                      </span>
+                      <span className="text-xs text-[#71717A]">
+                        {roleLabels[user?.role]}
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-[#71717A]" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent 
+                align="end" 
+                className="w-56 bg-[#161616] border-[#27272A]"
+              >
+                <DropdownMenuLabel className="text-[#A1A1AA]">Mi Cuenta</DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-[#27272A]" />
+                <DropdownMenuItem 
+                  onClick={handleLogout}
+                  data-testid="logout-button"
+                  className="text-red-400 focus:text-red-400 focus:bg-red-400/10 cursor-pointer"
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Cerrar Sesión
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="lg:ml-64 min-h-screen pt-16 lg:pt-0">
+        <div className="p-6 md:p-8">
+          {children}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default Layout;

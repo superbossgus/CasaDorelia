@@ -88,8 +88,12 @@ const Layout = ({ children }) => {
       <header className="lg:hidden fixed top-0 left-0 right-0 z-50 glass border-b border-[#27272A]">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
-            <Coffee className="h-6 w-6 text-[#708238]" />
-            <span className="font-manrope font-bold text-white">CaféControl</span>
+            <img 
+              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+              alt="Doré" 
+              className="h-8 w-auto"
+            />
+            <span className="font-manrope font-bold text-white">Doré</span>
           </div>
           <Button
             variant="ghost"
@@ -121,9 +125,13 @@ const Layout = ({ children }) => {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-[#27272A]">
-            <Coffee className="h-8 w-8 text-[#708238]" />
+            <img 
+              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+              alt="Doré" 
+              className="h-10 w-auto"
+            />
             <div>
-              <h1 className="font-manrope font-bold text-xl text-white">CaféControl</h1>
+              <h1 className="font-manrope font-bold text-xl text-white">Doré</h1>
               <p className="text-xs text-[#71717A]">Sistema de Gestión</p>
             </div>
           </div>

@@ -72,9 +72,16 @@ const Login = () => {
         />
         <div className="absolute inset-0 bg-gradient-to-r from-[#0D0D0D] via-[#0D0D0D]/60 to-transparent" />
         <div className="relative z-10 flex flex-col justify-end p-12 text-white">
-          <h1 className="font-manrope text-5xl font-bold mb-4 animate-fade-in">
-            Café<span className="text-[#708238]">Control</span>
-          </h1>
+          <div className="flex items-center gap-4 mb-4 animate-fade-in">
+            <img 
+              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+              alt="Doré" 
+              className="h-16 w-auto"
+            />
+            <h1 className="font-manrope text-5xl font-bold">
+              Doré
+            </h1>
+          </div>
           <p className="text-lg text-[#A1A1AA] max-w-md animate-fade-in stagger-1">
             Sistema integral de gestión para tus cafeterías. Controla ventas, inventario, costos y más.
           </p>
@@ -86,9 +93,13 @@ const Login = () => {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center mb-8">
-            <Coffee className="h-10 w-10 text-[#708238] mr-3" />
+            <img 
+              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+              alt="Doré" 
+              className="h-12 w-auto mr-3"
+            />
             <h1 className="font-manrope text-3xl font-bold text-white">
-              Café<span className="text-[#708238]">Control</span>
+              Doré
             </h1>
           </div>
 

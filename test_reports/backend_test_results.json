@@ -1,0 +1,172 @@
+{
+  "summary": {
+    "tests_run": 27,
+    "tests_passed": 27,
+    "success_rate": 100.0,
+    "timestamp": "2026-01-28T16:29:14.603438"
+  },
+  "results": [
+    {
+      "test": "Seed Data Creation",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:13.678059"
+    },
+    {
+      "test": "Admin Login",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:13.941578"
+    },
+    {
+      "test": "Token Extraction",
+      "success": true,
+      "details": "JWT token obtained",
+      "timestamp": "2026-01-28T16:29:13.942187"
+    },
+    {
+      "test": "Get Current User",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:13.980488"
+    },
+    {
+      "test": "Get Cafeterias",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.023505"
+    },
+    {
+      "test": "Cafeterias Data",
+      "success": true,
+      "details": "Found 3 cafeterias",
+      "timestamp": "2026-01-28T16:29:14.024163"
+    },
+    {
+      "test": "Get Categories",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.062199"
+    },
+    {
+      "test": "Categories Data",
+      "success": true,
+      "details": "Found 4 categories",
+      "timestamp": "2026-01-28T16:29:14.062883"
+    },
+    {
+      "test": "Get Products",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.101965"
+    },
+    {
+      "test": "Products Data",
+      "success": true,
+      "details": "Found 12 products",
+      "timestamp": "2026-01-28T16:29:14.102604"
+    },
+    {
+      "test": "Get Inventory",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.137912"
+    },
+    {
+      "test": "Inventory Data",
+      "success": true,
+      "details": "Found 36 inventory items",
+      "timestamp": "2026-01-28T16:29:14.138641"
+    },
+    {
+      "test": "Get Inventory Movements",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.171100"
+    },
+    {
+      "test": "Get Suppliers",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.205149"
+    },
+    {
+      "test": "Suppliers Data",
+      "success": true,
+      "details": "Found 3 suppliers",
+      "timestamp": "2026-01-28T16:29:14.205782"
+    },
+    {
+      "test": "Get Sales",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.253974"
+    },
+    {
+      "test": "Sales Data",
+      "success": true,
+      "details": "Found 211 sales",
+      "timestamp": "2026-01-28T16:29:14.255895"
+    },
+    {
+      "test": "Get Purchases",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.296128"
+    },
+    {
+      "test": "Purchases Data",
+      "success": true,
+      "details": "Found 0 purchases",
+      "timestamp": "2026-01-28T16:29:14.296874"
+    },
+    {
+      "test": "Dashboard Stats",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.335218"
+    },
+    {
+      "test": "Dashboard Stats Structure",
+      "success": true,
+      "details": "All required fields present",
+      "timestamp": "2026-01-28T16:29:14.335924"
+    },
+    {
+      "test": "Sales Comparison Report",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.379504"
+    },
+    {
+      "test": "Profit Analysis Report",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.419369"
+    },
+    {
+      "test": "Clip Status",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.453501"
+    },
+    {
+      "test": "Clip Sync",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.491016"
+    },
+    {
+      "test": "Get Users",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.522937"
+    },
+    {
+      "test": "Create Sale",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-28T16:29:14.602476"
+    }
+  ]
+}

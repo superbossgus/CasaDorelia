@@ -1,0 +1,145 @@
+{
+  "identity": {
+    "name": "E1",
+    "role": "Creative Designer",
+    "mission": "Create a top 1% dark-mode dashboard for coffee shop management that blends industrial precision with organic warmth.",
+    "principles": [
+      "Fusion over Imitation: Industrial precision meets organic coffee aesthetics.",
+      "Emotion First: The dashboard should feel 'caffeinated'—alert, dark, and rich.",
+      "Content is King: Data is the hero. High contrast for readability.",
+      "Zoom In: Focus on the details of the data.",
+      "Negative Space: Use deep black space to let the olive accents pop."
+    ]
+  },
+  "typography": {
+    "fonts": {
+      "primary": "Manrope",
+      "secondary": "Inter",
+      "mono": "JetBrains Mono"
+    },
+    "usage": {
+      "headings": "Manrope, font-bold, tracking-tight. Use for page titles and widget headers.",
+      "body": "Inter, font-normal, tracking-normal. Use for table data and general text.",
+      "code": "JetBrains Mono. Use for Order IDs, SKUs, and technical data."
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-bold",
+      "h2": "text-3xl font-semibold",
+      "h3": "text-2xl font-medium",
+      "body": "text-base text-muted-foreground",
+      "small": "text-sm text-muted-foreground/80"
+    }
+  },
+  "colors": {
+    "palette": {
+      "background": "#0D0D0D",
+      "surface": "#161616",
+      "surface_highlight": "#1F1F1F",
+      "primary": "#708238",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#3E4B28",
+      "secondary_foreground": "#E2E8F0",
+      "accent": "#8FBC8F",
+      "muted": "#27272A",
+      "muted_foreground": "#A1A1AA",
+      "border": "#27272A",
+      "destructive": "#7F1D1D",
+      "success": "#3E4B28",
+      "warning": "#D97706"
+    },
+    "gradients": {
+      "olive_glow": "linear-gradient(135deg, #708238 0%, #3E4B28 100%)",
+      "dark_surface": "linear-gradient(180deg, #161616 0%, #0D0D0D 100%)"
+    },
+    "usage_rules": {
+      "background": "Always use #0D0D0D for the main app background.",
+      "cards": "Use #161616 for card backgrounds with a 1px border of #27272A.",
+      "primary_action": "Use #708238 (Olive) for primary buttons and active states.",
+      "text_hierarchy": "Headings in #FFFFFF, Body in #A1A1AA, Subtext in #71717A."
+    }
+  },
+  "layout": {
+    "grid_system": {
+      "dashboard": "grid grid-cols-1 md:grid-cols-4 gap-6",
+      "widgets": "col-span-1 md:col-span-2 lg:col-span-1",
+      "main_chart": "col-span-1 md:col-span-4 lg:col-span-3 row-span-2"
+    },
+    "spacing": {
+      "container_padding": "p-6 md:p-8",
+      "card_padding": "p-6",
+      "section_gap": "gap-8"
+    },
+    "border_radius": {
+      "default": "rounded-md",
+      "card": "rounded-lg",
+      "button": "rounded-md"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#708238] hover:bg-[#5a692d] text-white shadow-lg shadow-[#708238]/20",
+      "secondary": "bg-[#27272A] hover:bg-[#3F3F46] text-white border border-[#3F3F46]",
+      "ghost": "hover:bg-[#27272A] text-[#A1A1AA] hover:text-white"
+    },
+    "cards": {
+      "style": "bg-[#161616] border border-[#27272A] shadow-none hover:border-[#708238]/50 transition-colors duration-300"
+    },
+    "inputs": {
+      "style": "bg-[#0D0D0D] border-[#27272A] focus:border-[#708238] focus:ring-1 focus:ring-[#708238] text-white placeholder:text-[#52525B]"
+    },
+    "tables": {
+      "header": "bg-[#1F1F1F] text-[#A1A1AA] uppercase text-xs font-bold tracking-wider",
+      "row": "border-b border-[#27272A] hover:bg-[#1F1F1F]/50 transition-colors",
+      "cell": "py-4 text-sm"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-md bg-[#0D0D0D]/80 border-b border-[#27272A]",
+    "shadows": {
+      "glow": "0 0 20px -5px rgba(112, 130, 56, 0.3)",
+      "card": "0 4px 6px -1px rgba(0, 0, 0, 0.5)"
+    },
+    "textures": "Use subtle noise texture on the background if possible to reduce banding."
+  },
+  "images": {
+    "login_hero": {
+      "url": "https://images.unsplash.com/photo-1735910626330-25ce60e05e84?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHwyfHxjb2ZmZWUlMjBzaG9wJTIwaW50ZXJpb3IlMjBtb2Rlcm4lMjBkYXJrfGVufDB8fHx8MTc2OTYxNzA3OXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Dark modern coffee shop interior with espresso machine",
+      "usage": "Login page background or hero section"
+    },
+    "coffee_beans": {
+      "url": "https://images.unsplash.com/photo-1652006836828-64039c0b3f82?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBiZWFucyUyMHJvYXN0ZWQlMjBjbG9zZSUyMHVwfGVufDB8fHx8MTc2OTYxNzA4NHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Close up of roasted coffee beans",
+      "usage": "Decorative element for inventory or product cards"
+    },
+    "barista_art": {
+      "url": "https://images.unsplash.com/photo-1736813133483-172c68973cb4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxiYXJpc3RhJTIwcG91cmluZyUyMGNvZmZlZSUyMGFydHxlbnwwfHx8fDE3Njk2MTcwODJ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Barista pouring latte art",
+      "usage": "Staff or training section header"
+    },
+    "cafe_ambiance": {
+      "url": "https://images.unsplash.com/photo-1760551939195-7d1023c11875?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBzaG9wJTIwaW50ZXJpb3IlMjBtb2Rlcm4lMjBkYXJrfGVufDB8fHx8MTc2OTYxNzA3OXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Woman holding coffee cup in modern cafe",
+      "usage": "Customer loyalty or community section"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Implement the dark theme immediately. Set the 'dark' class on the html element by default.",
+    "Use the specified Olive Green (#708238) as the primary brand color. Do not use the default Shadcn black/white.",
+    "Customize the Shadcn components to match the 'Industrial/Modern' aesthetic. Remove excessive rounded corners.",
+    "Ensure all text has sufficient contrast against the dark background. Use #EDEDED for headings.",
+    "Use the 'Manrope' font for headings. You may need to import it from Google Fonts.",
+    "For the dashboard, use a high-density grid layout. Don't leave too much empty space; this is a management tool.",
+    "Integrate the provided images where appropriate to break up the data density.",
+    "Use 'sonner' for notifications.",
+    "Ensure the app is fully responsive for tablets (iPad view) as requested."
+  ],
+  "universal_guidelines": [
+    "Avoid 'AI slop' aesthetics. No generic gradients or centered layouts.",
+    "Create depth with layered elements and z-index.",
+    "Use micro-animations for all interactions (hover, focus, active).",
+    "Do not use 'transition: all'. Animate specific properties.",
+    "Never use AI emojis as icons. Use Lucide React icons.",
+    "Add 'data-testid' to all interactive elements."
+  ]
+}

@@ -85,9 +85,10 @@ const Layout = ({ children }) => {
 
   const filteredNavItems = navItems.filter(item => item.roles.includes(user?.role));
 
-  const NavLink = ({ item, mobile = false }) => {
+  const NavLink = ({ item, mobile = false, alertCount = 0 }) => {
     const isActive = location.pathname === item.path;
     const Icon = item.icon;
+    const showBadge = item.path === "/ingredient-inventory" && alertCount > 0;
     
     return (
       <Link
@@ -95,15 +96,25 @@ const Layout = ({ children }) => {
         onClick={() => mobile && setSidebarOpen(false)}
         data-testid={`nav-${item.path.slice(1)}`}
         className={`
-          flex items-center gap-3 px-4 py-3 rounded-md transition-all duration-200
+          flex items-center gap-3 px-4 py-3 rounded-md transition-all duration-200 relative
           ${isActive 
             ? "bg-[#708238]/20 text-[#708238] border-l-3 border-[#708238]" 
             : "text-[#A1A1AA] hover:bg-[#708238]/10 hover:text-white hover:pl-5"
           }
         `}
       >
-        <Icon className="h-5 w-5" />
-        <span className="font-medium">{item.label}</span>
+        <div className="relative">
+          <Icon className="h-5 w-5" />
+          {showBadge && (
+            <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+          )}
+        </div>
+        <span className="font-medium flex-1">{item.label}</span>
+        {showBadge && (
+          <Badge className="bg-red-500 text-white text-xs px-1.5 py-0.5 h-5 min-w-[20px] flex items-center justify-center">
+            {alertCount}
+          </Badge>
+        )}
       </Link>
     );
   };

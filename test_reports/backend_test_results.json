@@ -1,172 +1,280 @@
 {
   "summary": {
-    "tests_run": 27,
-    "tests_passed": 27,
+    "tests_run": 45,
+    "tests_passed": 45,
     "success_rate": 100.0,
-    "timestamp": "2026-01-28T16:29:14.603438"
+    "timestamp": "2026-01-29T05:40:50.418764"
   },
   "results": [
     {
       "test": "Seed Data Creation",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:13.678059"
+      "timestamp": "2026-01-29T05:40:49.147476"
     },
     {
       "test": "Admin Login",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:13.941578"
+      "timestamp": "2026-01-29T05:40:49.424957"
     },
     {
       "test": "Token Extraction",
       "success": true,
       "details": "JWT token obtained",
-      "timestamp": "2026-01-28T16:29:13.942187"
+      "timestamp": "2026-01-29T05:40:49.425577"
     },
     {
       "test": "Get Current User",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:13.980488"
+      "timestamp": "2026-01-29T05:40:49.469021"
     },
     {
       "test": "Get Cafeterias",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.023505"
+      "timestamp": "2026-01-29T05:40:49.509157"
     },
     {
       "test": "Cafeterias Data",
       "success": true,
       "details": "Found 3 cafeterias",
-      "timestamp": "2026-01-28T16:29:14.024163"
+      "timestamp": "2026-01-29T05:40:49.509797"
     },
     {
       "test": "Get Categories",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.062199"
+      "timestamp": "2026-01-29T05:40:49.554987"
     },
     {
       "test": "Categories Data",
       "success": true,
       "details": "Found 4 categories",
-      "timestamp": "2026-01-28T16:29:14.062883"
+      "timestamp": "2026-01-29T05:40:49.558395"
     },
     {
       "test": "Get Products",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.101965"
+      "timestamp": "2026-01-29T05:40:49.605759"
     },
     {
       "test": "Products Data",
       "success": true,
       "details": "Found 12 products",
-      "timestamp": "2026-01-28T16:29:14.102604"
+      "timestamp": "2026-01-29T05:40:49.606788"
+    },
+    {
+      "test": "Get Ingredients",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:49.650764"
+    },
+    {
+      "test": "Ingredients Data",
+      "success": true,
+      "details": "Found 9 ingredients (expected 9+)",
+      "timestamp": "2026-01-29T05:40:49.651504"
+    },
+    {
+      "test": "Ingredient Structure",
+      "success": true,
+      "details": "Fields: ['name', 'unit', 'cost_per_unit', 'supplier_id', 'min_stock', 'is_active', 'id', 'supplier_name', 'created_at']",
+      "timestamp": "2026-01-29T05:40:49.651535"
+    },
+    {
+      "test": "Get Recipes",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:49.694102"
+    },
+    {
+      "test": "Recipes Data",
+      "success": true,
+      "details": "Found 4 recipes (expected 4+)",
+      "timestamp": "2026-01-29T05:40:49.694743"
+    },
+    {
+      "test": "Recipe Structure",
+      "success": true,
+      "details": "Fields: ['id', 'product_id', 'product_name', 'ingredients', 'portions', 'auto_deduct', 'calculated_cost', 'created_at']",
+      "timestamp": "2026-01-29T05:40:49.694768"
+    },
+    {
+      "test": "Recipe Cost Calculation",
+      "success": true,
+      "details": "Cost: $6.3",
+      "timestamp": "2026-01-29T05:40:49.694777"
     },
     {
       "test": "Get Inventory",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.137912"
+      "timestamp": "2026-01-29T05:40:49.738476"
     },
     {
       "test": "Inventory Data",
       "success": true,
       "details": "Found 36 inventory items",
-      "timestamp": "2026-01-28T16:29:14.138641"
+      "timestamp": "2026-01-29T05:40:49.739259"
     },
     {
       "test": "Get Inventory Movements",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.171100"
+      "timestamp": "2026-01-29T05:40:49.776482"
+    },
+    {
+      "test": "Get Ingredient Inventory",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:49.818172"
+    },
+    {
+      "test": "Ingredient Inventory Data",
+      "success": true,
+      "details": "Found 27 inventory items",
+      "timestamp": "2026-01-29T05:40:49.818844"
+    },
+    {
+      "test": "Get Ingredient Alerts",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:49.856886"
+    },
+    {
+      "test": "Ingredient Alerts",
+      "success": true,
+      "details": "Found 0 alerts",
+      "timestamp": "2026-01-29T05:40:49.857664"
     },
     {
       "test": "Get Suppliers",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.205149"
+      "timestamp": "2026-01-29T05:40:49.895080"
     },
     {
       "test": "Suppliers Data",
       "success": true,
       "details": "Found 3 suppliers",
-      "timestamp": "2026-01-28T16:29:14.205782"
+      "timestamp": "2026-01-29T05:40:49.895703"
     },
     {
       "test": "Get Sales",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.253974"
+      "timestamp": "2026-01-29T05:40:49.943681"
     },
     {
       "test": "Sales Data",
       "success": true,
-      "details": "Found 211 sales",
-      "timestamp": "2026-01-28T16:29:14.255895"
+      "details": "Found 180 sales",
+      "timestamp": "2026-01-29T05:40:49.945562"
     },
     {
       "test": "Get Purchases",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.296128"
+      "timestamp": "2026-01-29T05:40:49.989635"
     },
     {
       "test": "Purchases Data",
       "success": true,
       "details": "Found 0 purchases",
-      "timestamp": "2026-01-28T16:29:14.296874"
+      "timestamp": "2026-01-29T05:40:49.991077"
     },
     {
-      "test": "Dashboard Stats",
+      "test": "Export Catalog JSON",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.335218"
+      "timestamp": "2026-01-29T05:40:50.036576"
+    },
+    {
+      "test": "Catalog Structure",
+      "success": true,
+      "details": "Fields: ['cafeteria', 'exported_at', 'products']",
+      "timestamp": "2026-01-29T05:40:50.037291"
+    },
+    {
+      "test": "Catalog Products",
+      "success": true,
+      "details": "Found 12 products",
+      "timestamp": "2026-01-29T05:40:50.037308"
+    },
+    {
+      "test": "Dashboard Stats with Ingredient Alerts",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:50.076977"
+    },
+    {
+      "test": "Dashboard Ingredient Alerts",
+      "success": true,
+      "details": "Ingredient alerts: 0",
+      "timestamp": "2026-01-29T05:40:50.077658"
     },
     {
       "test": "Dashboard Stats Structure",
       "success": true,
       "details": "All required fields present",
-      "timestamp": "2026-01-28T16:29:14.335924"
+      "timestamp": "2026-01-29T05:40:50.077677"
     },
     {
       "test": "Sales Comparison Report",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.379504"
+      "timestamp": "2026-01-29T05:40:50.117290"
     },
     {
       "test": "Profit Analysis Report",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.419369"
+      "timestamp": "2026-01-29T05:40:50.156447"
     },
     {
       "test": "Clip Status",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.453501"
+      "timestamp": "2026-01-29T05:40:50.195228"
     },
     {
       "test": "Clip Sync",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.491016"
+      "timestamp": "2026-01-29T05:40:50.237098"
     },
     {
       "test": "Get Users",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.522937"
+      "timestamp": "2026-01-29T05:40:50.274696"
+    },
+    {
+      "test": "Get Inventory Before Sale",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:50.312719"
     },
     {
       "test": "Create Sale",
       "success": true,
       "details": "Status: 200",
-      "timestamp": "2026-01-28T16:29:14.602476"
+      "timestamp": "2026-01-29T05:40:50.375371"
+    },
+    {
+      "test": "Get Inventory After Sale",
+      "success": true,
+      "details": "Status: 200",
+      "timestamp": "2026-01-29T05:40:50.417820"
+    },
+    {
+      "test": "Ingredient Auto-Deduction",
+      "success": true,
+      "details": "Inventory levels changed after sale",
+      "timestamp": "2026-01-29T05:40:50.418542"
     }
   ]
 }

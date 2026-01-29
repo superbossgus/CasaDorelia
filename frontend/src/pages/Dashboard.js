@@ -12,6 +12,7 @@ import {
   Coffee,
   ArrowUpRight,
   ArrowDownRight,
+  Wheat,
 } from "lucide-react";
 import {
   AreaChart,
@@ -27,6 +28,8 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import AlertsPanel from "../components/AlertsPanel";
+import useAlerts from "../hooks/useAlerts";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 

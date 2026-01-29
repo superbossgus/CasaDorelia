@@ -92,7 +92,7 @@ El seed data genera:
 ## Backlog - Próximas Funcionalidades
 
 ### P1 - Alta Prioridad
-- [ ] Alertas automáticas programadas (cron job)
+- [ ] Alertas automáticas programadas (cron job para envío diario)
 - [ ] Sistema de alertas cuando el margen de ganancia baja por aumento de costos
 
 ### P2 - Media Prioridad

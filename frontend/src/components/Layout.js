@@ -183,7 +183,7 @@ const Layout = ({ children }) => {
           <ScrollArea className="flex-1 py-4">
             <nav className="px-3 space-y-1">
               {filteredNavItems.map((item) => (
-                <NavLink key={item.path} item={item} mobile={sidebarOpen} />
+                <NavLink key={item.path} item={item} mobile={sidebarOpen} alertCount={alertCount} />
               ))}
             </nav>
           </ScrollArea>

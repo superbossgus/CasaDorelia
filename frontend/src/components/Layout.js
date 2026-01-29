@@ -39,9 +39,28 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const Layout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [alertCount, setAlertCount] = useState(0);
   const { user, logout, isAdmin, canManage } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Fetch alert count for badge
+  useEffect(() => {
+    const fetchAlertCount = async () => {
+      try {
+        const response = await axios.get(`${API}/ingredient-inventory/alerts`);
+        const criticalAlerts = (response.data || []).filter(a => a.alert_type === "critical");
+        setAlertCount(criticalAlerts.length);
+      } catch (error) {
+        console.error("Error fetching alerts:", error);
+      }
+    };
+
+    fetchAlertCount();
+    const interval = setInterval(fetchAlertCount, 60000); // Update every minute
+    
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = () => {
     logout();

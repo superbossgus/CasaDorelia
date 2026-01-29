@@ -174,7 +174,7 @@ const Dashboard = () => {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {metricCards.map((card, index) => {
           const Icon = card.icon;
           return (
@@ -183,19 +183,19 @@ const Dashboard = () => {
               className={`bg-[#161616] border-[#27272A] metric-card card-hover animate-fade-in stagger-${index + 1} ${card.alert ? 'border-l-2 border-l-[#D97706]' : ''}`}
               data-testid={`metric-${card.title.toLowerCase().replace(/\s/g, '-')}`}
             >
-              <CardContent className="p-6">
+              <CardContent className="p-5">
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm text-[#A1A1AA] mb-1">{card.title}</p>
-                    <p className="text-2xl font-bold text-white font-manrope">{card.value}</p>
+                    <p className="text-xs text-[#A1A1AA] mb-1">{card.title}</p>
+                    <p className="text-xl font-bold text-white font-manrope">{card.value}</p>
                     <p className="text-xs text-[#71717A] mt-1">{card.subtitle}</p>
                   </div>
-                  <div className={`p-3 rounded-lg ${card.alert ? 'bg-[#D97706]/20' : 'bg-[#708238]/20'}`}>
-                    <Icon className={`h-5 w-5 ${card.alert ? 'text-[#D97706]' : 'text-[#708238]'}`} />
+                  <div className={`p-2 rounded-lg ${card.alert ? 'bg-[#D97706]/20' : 'bg-[#708238]/20'}`}>
+                    <Icon className={`h-4 w-4 ${card.alert ? 'text-[#D97706]' : 'text-[#708238]'}`} />
                   </div>
                 </div>
                 {card.trend !== "neutral" && (
-                  <div className={`flex items-center gap-1 mt-3 text-xs ${card.trend === 'up' ? 'text-[#8FBC8F]' : 'text-[#D97706]'}`}>
+                  <div className={`flex items-center gap-1 mt-2 text-xs ${card.trend === 'up' ? 'text-[#8FBC8F]' : 'text-[#D97706]'}`}>
                     {card.trend === 'up' ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                     <span>{card.trend === 'up' ? 'En aumento' : 'Requiere atención'}</span>
                   </div>
@@ -205,6 +205,14 @@ const Dashboard = () => {
           );
         })}
       </div>
+
+      {/* Alerts Panel */}
+      <AlertsPanel 
+        alerts={alerts}
+        loading={alertsLoading}
+        onRequestPermission={requestNotificationPermission}
+        notificationPermission={notificationPermission}
+      />
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

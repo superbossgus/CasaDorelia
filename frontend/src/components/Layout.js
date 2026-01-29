@@ -26,6 +26,9 @@ import {
   User,
   ChevronDown,
   Receipt,
+  Wheat,
+  BookOpen,
+  Boxes,
 } from "lucide-react";
 
 const Layout = ({ children }) => {
@@ -42,8 +45,11 @@ const Layout = ({ children }) => {
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin", "gerente", "cajero"] },
     { path: "/sales", label: "Ventas", icon: ShoppingCart, roles: ["admin", "gerente", "cajero"] },
-    { path: "/inventory", label: "Inventario", icon: Package, roles: ["admin", "gerente", "cajero"] },
+    { path: "/inventory", label: "Inv. Productos", icon: Package, roles: ["admin", "gerente", "cajero"] },
+    { path: "/ingredient-inventory", label: "Inv. Ingredientes", icon: Boxes, roles: ["admin", "gerente", "cajero"] },
     { path: "/products", label: "Productos", icon: Coffee, roles: ["admin", "gerente"] },
+    { path: "/ingredients", label: "Ingredientes", icon: Wheat, roles: ["admin", "gerente"] },
+    { path: "/recipes", label: "Recetas", icon: BookOpen, roles: ["admin", "gerente"] },
     { path: "/suppliers", label: "Proveedores", icon: Truck, roles: ["admin", "gerente"] },
     { path: "/purchases", label: "Compras", icon: Receipt, roles: ["admin", "gerente"] },
     { path: "/reports", label: "Reportes", icon: FileText, roles: ["admin", "gerente"] },

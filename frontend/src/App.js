@@ -6,6 +6,9 @@ import Dashboard from "./pages/Dashboard";
 import Sales from "./pages/Sales";
 import Inventory from "./pages/Inventory";
 import Products from "./pages/Products";
+import Ingredients from "./pages/Ingredients";
+import IngredientInventory from "./pages/IngredientInventory";
+import Recipes from "./pages/Recipes";
 import Suppliers from "./pages/Suppliers";
 import Purchases from "./pages/Purchases";
 import Reports from "./pages/Reports";
@@ -64,6 +67,24 @@ function App() {
           <Route path="/products" element={
             <ProtectedRoute allowedRoles={["admin", "gerente"]}>
               <Layout><Products /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/ingredients" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Ingredients /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/ingredient-inventory" element={
+            <ProtectedRoute>
+              <Layout><IngredientInventory /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/recipes" element={
+            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+              <Layout><Recipes /></Layout>
             </ProtectedRoute>
           } />
           

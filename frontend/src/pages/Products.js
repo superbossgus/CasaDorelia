@@ -35,6 +35,9 @@ const Products = () => {
   const [newCategory, setNewCategory] = useState({ name: "", description: "" });
   const [imageForm, setImageForm] = useState({ main_image: "", images: ["", "", ""] });
   const [exportCafeteria, setExportCafeteria] = useState("");
+  const [uploadingImage, setUploadingImage] = useState(null); // Track which image slot is uploading
+  const mainImageRef = useRef(null);
+  const additionalImageRefs = [useRef(null), useRef(null), useRef(null)];
 
   useEffect(() => {
     fetchData();

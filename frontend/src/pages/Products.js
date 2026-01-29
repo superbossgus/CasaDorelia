@@ -475,66 +475,106 @@ const Products = () => {
           </DialogHeader>
           <div className="space-y-6 mt-4">
             {/* Main Image */}
-            <div className="space-y-2">
-              <Label className="text-[#EDEDED]">Imagen Principal (URL)</Label>
-              <Input
-                value={imageForm.main_image}
-                onChange={(e) => setImageForm({...imageForm, main_image: e.target.value})}
-                className="bg-[#0D0D0D] border-[#27272A] text-white"
-                placeholder="https://ejemplo.com/imagen.jpg"
+            <div className="space-y-3">
+              <Label className="text-[#EDEDED] font-semibold">Imagen Principal</Label>
+              <input
+                type="file"
+                ref={mainImageRef}
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => handleFileUpload(e.target.files[0], "main", 0)}
               />
-              {imageForm.main_image && (
-                <div className="relative w-32 h-32 rounded-lg overflow-hidden bg-[#0D0D0D]">
-                  <img src={imageForm.main_image} alt="Principal" className="w-full h-full object-cover" />
+              
+              {imageForm.main_image ? (
+                <div className="relative w-40 h-40 rounded-lg overflow-hidden bg-[#0D0D0D] border border-[#27272A]">
+                  <img 
+                    src={imageForm.main_image.startsWith("/api") ? `${process.env.REACT_APP_BACKEND_URL}${imageForm.main_image}` : imageForm.main_image} 
+                    alt="Principal" 
+                    className="w-full h-full object-cover" 
+                  />
                   <button
-                    onClick={() => setImageForm({...imageForm, main_image: ""})}
-                    className="absolute top-1 right-1 p-1 bg-red-500/80 rounded-full text-white hover:bg-red-500"
+                    onClick={() => handleDeleteImage("main")}
+                    className="absolute top-2 right-2 p-1.5 bg-red-500/90 rounded-full text-white hover:bg-red-500 transition-colors"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-4 w-4" />
                   </button>
                 </div>
+              ) : (
+                <button
+                  onClick={() => mainImageRef.current?.click()}
+                  disabled={uploadingImage === "main_0"}
+                  className="w-40 h-40 rounded-lg border-2 border-dashed border-[#27272A] bg-[#0D0D0D] hover:border-[#708238] hover:bg-[#708238]/10 transition-all flex flex-col items-center justify-center gap-2 text-[#71717A] hover:text-[#708238]"
+                >
+                  {uploadingImage === "main_0" ? (
+                    <Loader2 className="h-8 w-8 animate-spin" />
+                  ) : (
+                    <>
+                      <Upload className="h-8 w-8" />
+                      <span className="text-xs">Subir imagen</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
 
             {/* Additional Images */}
-            <div className="space-y-2">
-              <Label className="text-[#EDEDED]">Imágenes Adicionales (hasta 3)</Label>
+            <div className="space-y-3">
+              <Label className="text-[#EDEDED] font-semibold">Imágenes Adicionales (hasta 3)</Label>
               <div className="grid grid-cols-3 gap-4">
                 {[0, 1, 2].map((index) => (
                   <div key={index} className="space-y-2">
-                    <Input
-                      value={imageForm.images[index]}
-                      onChange={(e) => {
-                        const newImages = [...imageForm.images];
-                        newImages[index] = e.target.value;
-                        setImageForm({...imageForm, images: newImages});
-                      }}
-                      className="bg-[#0D0D0D] border-[#27272A] text-white text-xs"
-                      placeholder={`Imagen ${index + 1}`}
+                    <input
+                      type="file"
+                      ref={additionalImageRefs[index]}
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => handleFileUpload(e.target.files[0], "additional", index)}
                     />
-                    {imageForm.images[index] && (
-                      <div className="relative aspect-square rounded-lg overflow-hidden bg-[#0D0D0D]">
-                        <img src={imageForm.images[index]} alt={`Adicional ${index + 1}`} className="w-full h-full object-cover" />
+                    
+                    {imageForm.images[index] ? (
+                      <div className="relative aspect-square rounded-lg overflow-hidden bg-[#0D0D0D] border border-[#27272A]">
+                        <img 
+                          src={imageForm.images[index].startsWith("/api") ? `${process.env.REACT_APP_BACKEND_URL}${imageForm.images[index]}` : imageForm.images[index]} 
+                          alt={`Adicional ${index + 1}`} 
+                          className="w-full h-full object-cover" 
+                        />
                         <button
-                          onClick={() => {
-                            const newImages = [...imageForm.images];
-                            newImages[index] = "";
-                            setImageForm({...imageForm, images: newImages});
-                          }}
-                          className="absolute top-1 right-1 p-1 bg-red-500/80 rounded-full text-white hover:bg-red-500"
+                          onClick={() => handleDeleteImage("additional", index)}
+                          className="absolute top-1 right-1 p-1 bg-red-500/90 rounded-full text-white hover:bg-red-500 transition-colors"
                         >
                           <X className="h-3 w-3" />
                         </button>
                       </div>
+                    ) : (
+                      <button
+                        onClick={() => additionalImageRefs[index].current?.click()}
+                        disabled={uploadingImage === `additional_${index}`}
+                        className="aspect-square w-full rounded-lg border-2 border-dashed border-[#27272A] bg-[#0D0D0D] hover:border-[#708238] hover:bg-[#708238]/10 transition-all flex flex-col items-center justify-center gap-1 text-[#71717A] hover:text-[#708238]"
+                      >
+                        {uploadingImage === `additional_${index}` ? (
+                          <Loader2 className="h-6 w-6 animate-spin" />
+                        ) : (
+                          <>
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs">#{index + 1}</span>
+                          </>
+                        )}
+                      </button>
                     )}
                   </div>
                 ))}
               </div>
             </div>
 
-            <Button onClick={handleImageSubmit} disabled={isSubmitting} className="w-full bg-[#708238] hover:bg-[#5a692d] text-white">
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Image className="h-4 w-4 mr-2" />}
-              Guardar Imágenes
+            <div className="bg-[#0D0D0D] rounded-lg p-3 border border-[#27272A]">
+              <p className="text-xs text-[#71717A]">
+                <span className="text-[#708238]">Tip:</span> Las imágenes se guardan automáticamente al subirlas. Formatos permitidos: JPEG, PNG, WebP, GIF. Tamaño máximo: 5MB.
+              </p>
+            </div>
+
+            <Button onClick={() => setIsImageDialogOpen(false)} className="w-full bg-[#708238] hover:bg-[#5a692d] text-white">
+              <Image className="h-4 w-4 mr-2" />
+              Cerrar
             </Button>
           </div>
         </DialogContent>

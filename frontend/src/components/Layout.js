@@ -29,6 +29,7 @@ import {
   Wheat,
   BookOpen,
   Boxes,
+  MessageCircle,
 } from "lucide-react";
 
 const Layout = ({ children }) => {
@@ -55,6 +56,7 @@ const Layout = ({ children }) => {
     { path: "/reports", label: "Reportes", icon: FileText, roles: ["admin", "gerente"] },
     { path: "/cafeterias", label: "Cafeterías", icon: Store, roles: ["admin"] },
     { path: "/users", label: "Usuarios", icon: Users, roles: ["admin"] },
+    { path: "/whatsapp-alerts", label: "Alertas WhatsApp", icon: MessageCircle, roles: ["admin"] },
   ];
 
   const filteredNavItems = navItems.filter(item => item.roles.includes(user?.role));

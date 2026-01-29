@@ -1640,6 +1640,195 @@ async def get_clip_status(current_user: dict = Depends(get_current_user)):
         "message": "Clip no configurado. Visite developer.clip.mx para obtener credenciales." if not clip_api_key else "Clip conectado"
     }
 
+# ============== WHATSAPP ALERTS ==============
+
+class WhatsAppNumberCreate(BaseModel):
+    phone_number: str  # Format: +525591985187
+    name: str
+    is_active: bool = True
+
+class WhatsAppNumberResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    phone_number: str
+    name: str
+    is_active: bool
+    created_at: str
+
+@api_router.get("/whatsapp/numbers", response_model=List[WhatsAppNumberResponse])
+async def get_whatsapp_numbers(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get all WhatsApp numbers configured for alerts"""
+    numbers = await db.whatsapp_numbers.find({}, {"_id": 0}).to_list(50)
+    return [WhatsAppNumberResponse(**n) for n in numbers]
+
+@api_router.post("/whatsapp/numbers", response_model=WhatsAppNumberResponse)
+async def add_whatsapp_number(number: WhatsAppNumberCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Add a WhatsApp number for alerts"""
+    # Validate format
+    if not number.phone_number.startswith("+"):
+        raise HTTPException(status_code=400, detail="El número debe empezar con + y código de país (ej: +525591985187)")
+    
+    # Check if exists
+    existing = await db.whatsapp_numbers.find_one({"phone_number": number.phone_number})
+    if existing:
+        raise HTTPException(status_code=400, detail="Este número ya está registrado")
+    
+    number_id = str(uuid.uuid4())
+    number_dict = number.model_dump()
+    number_dict["id"] = number_id
+    number_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.whatsapp_numbers.insert_one(number_dict)
+    return WhatsAppNumberResponse(**number_dict)
+
+@api_router.delete("/whatsapp/numbers/{number_id}")
+async def delete_whatsapp_number(number_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Remove a WhatsApp number"""
+    result = await db.whatsapp_numbers.delete_one({"id": number_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Número no encontrado")
+    return {"message": "Número eliminado"}
+
+@api_router.get("/whatsapp/status")
+async def get_whatsapp_status(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Check WhatsApp integration status"""
+    return {
+        "configured": bool(twilio_client),
+        "twilio_number": TWILIO_WHATSAPP_NUMBER,
+        "message": "WhatsApp configurado correctamente" if twilio_client else "Twilio no configurado"
+    }
+
+@api_router.post("/whatsapp/send-test")
+async def send_test_whatsapp(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Send a test message to all configured numbers"""
+    if not twilio_client:
+        raise HTTPException(status_code=400, detail="Twilio no está configurado")
+    
+    numbers = await db.whatsapp_numbers.find({"is_active": True}, {"_id": 0}).to_list(50)
+    if not numbers:
+        raise HTTPException(status_code=400, detail="No hay números configurados para alertas")
+    
+    results = []
+    for num in numbers:
+        try:
+            message = twilio_client.messages.create(
+                body=f"🧪 Mensaje de prueba de Doré\n\nEste es un mensaje de prueba para verificar que las alertas de WhatsApp funcionan correctamente.\n\n✅ Conexión exitosa",
+                from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+                to=f"whatsapp:{num['phone_number']}"
+            )
+            results.append({"phone": num["phone_number"], "status": "sent", "sid": message.sid})
+            logger.info(f"Test WhatsApp sent to {num['phone_number']}: {message.sid}")
+        except Exception as e:
+            results.append({"phone": num["phone_number"], "status": "failed", "error": str(e)})
+            logger.error(f"Failed to send WhatsApp to {num['phone_number']}: {e}")
+    
+    return {"results": results}
+
+@api_router.post("/whatsapp/send-alerts")
+async def send_ingredient_alerts(current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    """Send critical ingredient alerts to all configured WhatsApp numbers"""
+    if not twilio_client:
+        raise HTTPException(status_code=400, detail="Twilio no está configurado")
+    
+    # Get critical alerts (less than 3 days of stock)
+    alerts = await get_critical_ingredient_alerts()
+    
+    if not alerts:
+        return {"message": "No hay alertas críticas de ingredientes", "alerts_sent": 0}
+    
+    numbers = await db.whatsapp_numbers.find({"is_active": True}, {"_id": 0}).to_list(50)
+    if not numbers:
+        raise HTTPException(status_code=400, detail="No hay números configurados para alertas")
+    
+    # Build alert message
+    message_lines = ["🚨 *ALERTA CRÍTICA - DORÉ*\n", "Ingredientes con stock crítico (< 3 días):\n"]
+    
+    for alert in alerts[:10]:  # Max 10 alerts per message
+        message_lines.append(
+            f"⚠️ *{alert['ingredient_name']}*\n"
+            f"   📍 {alert['cafeteria_name']}\n"
+            f"   📦 Stock: {alert['current_stock']:.1f} {alert['unit']}\n"
+            f"   ⏱️ Días restantes: {alert['days_until_stockout']}\n"
+            f"   🛒 Sugerido pedir: {alert['suggested_order']:.1f} {alert['unit']}\n"
+        )
+    
+    message_lines.append(f"\n📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    message_body = "\n".join(message_lines)
+    
+    results = []
+    for num in numbers:
+        try:
+            message = twilio_client.messages.create(
+                body=message_body,
+                from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+                to=f"whatsapp:{num['phone_number']}"
+            )
+            results.append({"phone": num["phone_number"], "status": "sent", "sid": message.sid})
+            logger.info(f"Alert WhatsApp sent to {num['phone_number']}: {message.sid}")
+        except Exception as e:
+            results.append({"phone": num["phone_number"], "status": "failed", "error": str(e)})
+            logger.error(f"Failed to send alert to {num['phone_number']}: {e}")
+    
+    # Log alert sent
+    await db.alert_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "type": "whatsapp_ingredient_alert",
+        "alerts_count": len(alerts),
+        "recipients": len(numbers),
+        "results": results,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {
+        "message": f"Alertas enviadas a {len(numbers)} números",
+        "alerts_count": len(alerts),
+        "results": results
+    }
+
+async def get_critical_ingredient_alerts():
+    """Get ingredients with critical stock (less than 3 days)"""
+    inventory = await db.ingredient_inventory.find({}, {"_id": 0}).to_list(1000)
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    
+    # Calculate consumption from last 30 days
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    movements = await db.ingredient_movements.find({
+        "movement_type": "consumo_venta",
+        "created_at": {"$gte": thirty_days_ago}
+    }, {"_id": 0}).to_list(10000)
+    
+    daily_consumption = {}
+    for mov in movements:
+        key = f"{mov['ingredient_id']}_{mov.get('cafeteria_id', '')}"
+        if key not in daily_consumption:
+            daily_consumption[key] = 0
+        daily_consumption[key] += mov["quantity"]
+    
+    critical_alerts = []
+    for item in inventory:
+        key = f"{item['ingredient_id']}_{item['cafeteria_id']}"
+        avg_daily = daily_consumption.get(key, 0) / 30 if daily_consumption.get(key) else 0
+        days_left = item["quantity"] / avg_daily if avg_daily > 0 else float('inf')
+        
+        # Critical = less than 3 days
+        if days_left < 3 and days_left != float('inf'):
+            ing = ingredients.get(item["ingredient_id"], {})
+            critical_alerts.append({
+                "ingredient_id": item["ingredient_id"],
+                "ingredient_name": ing.get("name", "Desconocido"),
+                "unit": ing.get("unit", "unidad"),
+                "cafeteria_id": item["cafeteria_id"],
+                "cafeteria_name": cafeterias.get(item["cafeteria_id"], "Desconocida"),
+                "current_stock": item["quantity"],
+                "min_stock": item["min_stock"],
+                "avg_daily_consumption": round(avg_daily, 2),
+                "days_until_stockout": round(days_left, 1),
+                "suggested_order": round(avg_daily * 14 - item["quantity"], 2) if avg_daily > 0 else item["min_stock"] * 2
+            })
+    
+    return sorted(critical_alerts, key=lambda x: x["days_until_stockout"])
+
 # ============== SEED DATA ==============
 
 @api_router.post("/seed")

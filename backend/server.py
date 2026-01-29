@@ -2172,6 +2172,30 @@ async def seed_data():
 async def root():
     return {"message": "Doré API v1.0"}
 
+# Serve uploaded files
+@api_router.get("/uploads/products/{filename}")
+async def get_uploaded_image(filename: str):
+    """Serve uploaded product images"""
+    file_path = UPLOADS_DIR / "products" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    # Determine content type
+    ext = filename.split(".")[-1].lower()
+    content_types = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "gif": "image/gif",
+        "webp": "image/webp"
+    }
+    content_type = content_types.get(ext, "application/octet-stream")
+    
+    with open(file_path, "rb") as f:
+        content = f.read()
+    
+    return Response(content=content, media_type=content_type)
+
 # Include router
 app.include_router(api_router)
 

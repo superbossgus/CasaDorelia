@@ -119,12 +119,20 @@ const Dashboard = () => {
       subtitle: "Ganancia neta",
     },
     {
-      title: "Alertas Stock",
+      title: "Alertas Productos",
       value: stats.low_stock_alerts,
       icon: AlertTriangle,
       trend: stats.low_stock_alerts > 0 ? "down" : "neutral",
       subtitle: "Productos bajos",
       alert: stats.low_stock_alerts > 0,
+    },
+    {
+      title: "Alertas Ingredientes",
+      value: stats.low_ingredient_alerts || alertCount,
+      icon: Wheat,
+      trend: (stats.low_ingredient_alerts || alertCount) > 0 ? "down" : "neutral",
+      subtitle: "Ingredientes bajos",
+      alert: (stats.low_ingredient_alerts || alertCount) > 0,
     },
   ];
 

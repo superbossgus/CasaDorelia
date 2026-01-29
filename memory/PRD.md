@@ -57,6 +57,12 @@ Sistema web integral para gestión de 3 cafeterías con control de ventas, inven
   - Formato JSON
   - Formato CSV
   - Incluye disponibilidad de stock
+- ✅ **Dashboard de Alertas en Tiempo Real**:
+  - Panel de alertas de inventario integrado en Dashboard
+  - Notificaciones push del navegador (Web Notifications API)
+  - Badge con contador de alertas en sidebar
+  - Indicadores de alerta crítica (<3 días) y advertencia (<7 días)
+  - Polling automático cada minuto para actualización
 
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real

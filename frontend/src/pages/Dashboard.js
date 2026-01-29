@@ -39,6 +39,15 @@ const Dashboard = () => {
   const [cafeterias, setCafeterias] = useState([]);
   const [selectedCafeteria, setSelectedCafeteria] = useState("all");
   const [loading, setLoading] = useState(true);
+  
+  // Use alerts hook
+  const { 
+    alerts, 
+    alertCount, 
+    loading: alertsLoading, 
+    requestNotificationPermission, 
+    notificationPermission 
+  } = useAlerts(60000); // Poll every minute
 
   useEffect(() => {
     fetchCafeterias();

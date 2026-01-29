@@ -1,4 +1,4 @@
-# CaféControl - Sistema de Gestión de Cafeterías
+# Doré - Sistema de Gestión de Cafeterías
 
 ## Resumen del Proyecto
 Sistema web integral para gestión de 3 cafeterías con control de ventas, inventario, costos, menús y utilidad.
@@ -6,11 +6,15 @@ Sistema web integral para gestión de 3 cafeterías con control de ventas, inven
 ## Fecha de Creación
 28 de Enero, 2026
 
+## Última Actualización
+29 de Enero, 2026
+
 ## Arquitectura Técnica
 - **Frontend**: React 19 + Tailwind CSS + Shadcn UI + Recharts
 - **Backend**: FastAPI + Python
 - **Base de Datos**: MongoDB
 - **Autenticación**: JWT
+- **Notificaciones**: Twilio WhatsApp API
 
 ## Roles de Usuario
 1. **Administrador**: Acceso completo al sistema
@@ -28,18 +32,34 @@ Sistema web integral para gestión de 3 cafeterías con control de ventas, inven
 
 ### Módulos
 - ✅ **Ventas**: Registro con múltiples productos, métodos de pago (Efectivo/Tarjeta/Clip)
-- ✅ **Inventario**: Control de stock, alertas de stock bajo, movimientos (entrada/salida/merma)
+- ✅ **Inventario de Productos**: Control de stock, alertas de stock bajo, movimientos
+- ✅ **Inventario de Ingredientes**: Control de materia prima con consumo automático
 - ✅ **Productos**: CRUD con categorías, precio, costo, margen de utilidad
+- ✅ **Ingredientes**: Gestión de materias primas con costo por unidad
+- ✅ **Recetas**: Vinculación ingredientes-productos con cálculo automático de costos
 - ✅ **Proveedores**: Gestión de proveedores de insumos
-- ✅ **Compras**: Registro de compras a proveedores con actualización automática de inventario
+- ✅ **Compras**: Registro de compras con actualización automática de inventario
 - ✅ **Reportes**: Comparativas de ventas, análisis de utilidad, métricas por cafetería
 - ✅ **Usuarios**: Gestión de usuarios con roles y asignación de cafetería
 - ✅ **Cafeterías**: CRUD de sucursales
 
+### Nuevas Funcionalidades (29-Ene-2026)
+- ✅ **Alertas WhatsApp**: Notificaciones de stock crítico vía Twilio
+  - Configuración de múltiples números de WhatsApp
+  - Envío de alertas manuales
+  - Envío de mensajes de prueba
+  - Monitoreo de ingredientes con menos de 3 días de stock
+- ✅ **Subida de Imágenes**: Upload de fotos de productos
+  - 1 imagen principal
+  - Hasta 3 imágenes adicionales
+  - Formatos: JPEG, PNG, WebP, GIF (máx 5MB)
+- ✅ **Exportación de Catálogo**: Descargar catálogo por cafetería
+  - Formato JSON
+  - Formato CSV
+  - Incluye disponibilidad de stock
+
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real
-- `/api/clip/sync` - Sincronización de transacciones
-- `/api/clip/status` - Estado de conexión
 - Requiere credenciales de developer.clip.mx para activación
 
 ## Credenciales de Prueba
@@ -47,27 +67,34 @@ Sistema web integral para gestión de 3 cafeterías con control de ventas, inven
 - **Password**: admin123
 
 ## Datos de Prueba
-El botón "Crear Datos de Prueba" en login genera:
+El seed data genera:
 - 1 usuario admin
 - 3 cafeterías (Central, Norte, Sur)
 - 4 categorías de productos
 - 12 productos con precios y costos
+- 9 ingredientes
+- 4 recetas
 - Inventario inicial por cafetería
 - 3 proveedores
-- Ventas de prueba (últimos 7 días)
+
+## Configuración Twilio WhatsApp
+- **Account SID**: Configurado en .env
+- **Auth Token**: Configurado en .env
+- **Número WhatsApp**: +15096764561
+- **Nota**: Usuarios deben enviar mensaje al sandbox de Twilio antes de recibir alertas
 
 ## Backlog - Próximas Funcionalidades
 
-### P0 - Alta Prioridad
-- [ ] Integración real con Clip POS API
-- [ ] Exportación de reportes a PDF/Excel
+### P1 - Alta Prioridad
+- [ ] Alertas automáticas programadas (cron job)
+- [ ] Sistema de alertas cuando el margen de ganancia baja por aumento de costos
 
-### P1 - Media Prioridad
-- [ ] Alertas por email de stock bajo
+### P2 - Media Prioridad
+- [ ] Reporte comparativo de consumo teórico vs real de ingredientes
 - [ ] Historial de cambios de precios
-- [ ] Programa de fidelización de clientes
+- [ ] Integración real con Clip POS API
 
-### P2 - Baja Prioridad
+### P3 - Baja Prioridad
 - [ ] App móvil para cajeros
 - [ ] Integración con contabilidad
 - [ ] Pronósticos de ventas con IA
@@ -76,9 +103,41 @@ El botón "Crear Datos de Prueba" en login genera:
 - `POST /api/auth/login` - Autenticación
 - `GET /api/dashboard/stats` - Estadísticas dashboard
 - `GET/POST /api/sales` - Gestión de ventas
-- `GET/POST /api/inventory` - Control de inventario
+- `GET/POST /api/inventory` - Control de inventario de productos
+- `GET/POST /api/ingredient-inventory` - Control de inventario de ingredientes
 - `GET/POST /api/products` - Productos
+- `POST /api/products/{id}/upload-image` - Subir imagen de producto
+- `GET/POST /api/ingredients` - Ingredientes
+- `GET/POST /api/recipes` - Recetas
 - `GET/POST /api/suppliers` - Proveedores
 - `GET/POST /api/purchases` - Compras
+- `GET /api/catalog/export/{cafeteria_id}` - Exportar catálogo
+- `GET/POST /api/whatsapp/numbers` - Gestión números WhatsApp
+- `POST /api/whatsapp/send-test` - Enviar mensaje de prueba
+- `POST /api/whatsapp/send-alerts` - Enviar alertas de stock crítico
 - `GET /api/reports/sales-comparison` - Comparativa ventas
 - `GET /api/reports/profit-analysis` - Análisis de utilidad
+
+## Estructura de Archivos
+```
+/app/
+├── backend/
+│   ├── .env
+│   ├── requirements.txt
+│   ├── server.py
+│   ├── uploads/products/  # Imágenes subidas
+│   └── tests/
+└── frontend/
+    ├── public/
+    ├── src/
+    │   ├── components/
+    │   │   └── ui/        # Componentes Shadcn
+    │   ├── context/
+    │   │   └── AuthContext.js
+    │   ├── pages/
+    │   │   ├── WhatsAppAlerts.js
+    │   │   ├── Products.js
+    │   │   └── ...
+    │   └── App.js
+    └── package.json
+```

@@ -156,6 +156,80 @@ const Products = () => {
     }
   };
 
+  const handleFileUpload = async (file, imageType, imageIndex = 0) => {
+    if (!selectedProduct || !file) return;
+    
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("El archivo es demasiado grande. Máximo 5MB");
+      return;
+    }
+    
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error("Tipo de archivo no permitido. Use JPEG, PNG, WebP o GIF");
+      return;
+    }
+    
+    setUploadingImage(`${imageType}_${imageIndex}`);
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("image_type", imageType);
+    formData.append("image_index", imageIndex.toString());
+    
+    try {
+      const response = await axios.post(
+        `${API}/products/${selectedProduct.id}/upload-image`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+      
+      toast.success("Imagen subida correctamente");
+      
+      // Update local state with new URL
+      if (imageType === "main") {
+        setImageForm({ ...imageForm, main_image: response.data.url });
+      } else {
+        const newImages = [...imageForm.images];
+        newImages[imageIndex] = response.data.url;
+        setImageForm({ ...imageForm, images: newImages });
+      }
+      
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Error al subir imagen");
+    } finally {
+      setUploadingImage(null);
+    }
+  };
+
+  const handleDeleteImage = async (imageType, imageIndex = 0) => {
+    if (!selectedProduct) return;
+    
+    try {
+      await axios.delete(`${API}/products/${selectedProduct.id}/image`, {
+        params: { image_type: imageType, image_index: imageIndex }
+      });
+      
+      toast.success("Imagen eliminada");
+      
+      // Update local state
+      if (imageType === "main") {
+        setImageForm({ ...imageForm, main_image: "" });
+      } else {
+        const newImages = [...imageForm.images];
+        newImages[imageIndex] = "";
+        setImageForm({ ...imageForm, images: newImages });
+      }
+      
+      fetchData();
+    } catch (error) {
+      toast.error("Error al eliminar imagen");
+    }
+  };
+
   const handleExport = async (format) => {
     if (!exportCafeteria) {
       toast.error("Selecciona una cafetería");

@@ -957,6 +957,89 @@ async def update_product_images(product_id: str, images: ProductImageUpdate, cur
     await db.products.update_one({"id": product_id}, {"$set": update_data})
     return {"message": "Imágenes actualizadas"}
 
+@api_router.post("/products/{product_id}/upload-image")
+async def upload_product_image(
+    product_id: str,
+    image_type: str = Form(...),  # "main" or "additional"
+    image_index: int = Form(0),  # 0, 1, 2 for additional images
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Upload a product image file"""
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Tipo de archivo no permitido. Use JPEG, PNG, WebP o GIF")
+    
+    # Generate unique filename
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    filename = f"{product_id}_{image_type}_{image_index}_{uuid.uuid4().hex[:8]}.{ext}"
+    file_path = UPLOADS_DIR / "products" / filename
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al guardar imagen: {str(e)}")
+    
+    # Generate URL path
+    image_url = f"/api/uploads/products/{filename}"
+    
+    # Update product in database
+    if image_type == "main":
+        await db.products.update_one({"id": product_id}, {"$set": {"main_image": image_url}})
+    else:
+        # Get current images array
+        current_images = product.get("images", ["", "", ""])
+        # Ensure we have 3 slots
+        while len(current_images) < 3:
+            current_images.append("")
+        # Update the specific index
+        if 0 <= image_index < 3:
+            current_images[image_index] = image_url
+        await db.products.update_one({"id": product_id}, {"$set": {"images": current_images}})
+    
+    return {"message": "Imagen subida correctamente", "url": image_url}
+
+@api_router.delete("/products/{product_id}/image")
+async def delete_product_image(
+    product_id: str,
+    image_type: str,  # "main" or "additional"
+    image_index: int = 0,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Delete a product image"""
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    if image_type == "main":
+        # Delete main image file if it's a local file
+        if product.get("main_image") and product["main_image"].startswith("/api/uploads"):
+            filename = product["main_image"].split("/")[-1]
+            file_path = UPLOADS_DIR / "products" / filename
+            if file_path.exists():
+                file_path.unlink()
+        await db.products.update_one({"id": product_id}, {"$set": {"main_image": None}})
+    else:
+        current_images = product.get("images", ["", "", ""])
+        if 0 <= image_index < len(current_images):
+            # Delete file if local
+            if current_images[image_index] and current_images[image_index].startswith("/api/uploads"):
+                filename = current_images[image_index].split("/")[-1]
+                file_path = UPLOADS_DIR / "products" / filename
+                if file_path.exists():
+                    file_path.unlink()
+            current_images[image_index] = ""
+            await db.products.update_one({"id": product_id}, {"$set": {"images": current_images}})
+    
+    return {"message": "Imagen eliminada"}
+
 @api_router.delete("/products/{product_id}")
 async def delete_product(product_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
     result = await db.products.delete_one({"id": product_id})

@@ -14,6 +14,7 @@ import Purchases from "./pages/Purchases";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
 import Cafeterias from "./pages/Cafeterias";
+import WhatsAppAlerts from "./pages/WhatsAppAlerts";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -115,6 +116,12 @@ function App() {
           <Route path="/cafeterias" element={
             <ProtectedRoute allowedRoles={["admin"]}>
               <Layout><Cafeterias /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/whatsapp-alerts" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><WhatsAppAlerts /></Layout>
             </ProtectedRoute>
           } />
         </Routes>

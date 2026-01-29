@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -11,7 +11,7 @@ import { Badge } from "../components/ui/badge";
 import { Switch } from "../components/ui/switch";
 import { toast } from "sonner";
 import axios from "axios";
-import { Coffee, Plus, Pencil, Trash2, Loader2, Image, Download, X, BookOpen } from "lucide-react";
+import { Coffee, Plus, Pencil, Trash2, Loader2, Image, Download, X, BookOpen, Upload } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -12,6 +12,10 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
 import bcrypt
+import json
+import csv
+import io
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -26,7 +30,7 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'cafe-control-secret-key-2024')
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
-app = FastAPI(title="CaféControl API")
+app = FastAPI(title="Doré API")
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 
@@ -88,13 +92,88 @@ class CategoryResponse(CategoryBase):
     model_config = ConfigDict(extra="ignore")
     id: str
 
+# ============== INGREDIENT MODELS ==============
+
+class IngredientBase(BaseModel):
+    name: str
+    unit: str  # kg, litro, pieza, gramo, ml
+    cost_per_unit: float
+    supplier_id: Optional[str] = None
+    min_stock: float = 10.0
+    is_active: bool = True
+
+class IngredientCreate(IngredientBase):
+    pass
+
+class IngredientResponse(IngredientBase):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    supplier_name: Optional[str] = None
+    created_at: str
+
+class IngredientInventoryBase(BaseModel):
+    ingredient_id: str
+    cafeteria_id: str
+    quantity: float
+    min_stock: float = 10.0
+
+class IngredientInventoryCreate(IngredientInventoryBase):
+    pass
+
+class IngredientInventoryResponse(IngredientInventoryBase):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    ingredient_name: Optional[str] = None
+    unit: Optional[str] = None
+    cafeteria_name: Optional[str] = None
+    is_low_stock: bool = False
+    days_until_stockout: Optional[float] = None
+    cost_per_unit: float = 0.0
+
+class IngredientMovement(BaseModel):
+    inventory_id: str
+    quantity: float
+    movement_type: str  # "entrada", "salida", "merma", "ajuste", "consumo_venta"
+    reason: Optional[str] = None
+    sale_id: Optional[str] = None
+
+# ============== RECIPE MODELS ==============
+
+class RecipeIngredient(BaseModel):
+    ingredient_id: str
+    quantity: float  # cantidad por porción
+
+class RecipeBase(BaseModel):
+    product_id: str
+    ingredients: List[RecipeIngredient]
+    portions: int = 1  # porciones que rinde la receta
+    auto_deduct: bool = True  # descuento automático por ventas
+
+class RecipeCreate(RecipeBase):
+    pass
+
+class RecipeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    product_id: str
+    product_name: Optional[str] = None
+    ingredients: List[dict]
+    portions: int
+    auto_deduct: bool
+    calculated_cost: float = 0.0
+    created_at: str
+
+# ============== PRODUCT MODELS (UPDATED) ==============
+
 class ProductBase(BaseModel):
     name: str
     description: Optional[str] = None
     category_id: str
     price: float
-    cost: float
+    cost: float  # Este será el costo calculado de la receta
     is_active: bool = True
+    main_image: Optional[str] = None
+    images: List[str] = []  # hasta 3 imágenes adicionales
 
 class ProductCreate(ProductBase):
     pass
@@ -103,7 +182,15 @@ class ProductResponse(ProductBase):
     model_config = ConfigDict(extra="ignore")
     id: str
     margin: float = 0.0
+    recipe_cost: float = 0.0  # costo calculado de la receta
+    has_recipe: bool = False
     created_at: str
+
+class ProductImageUpdate(BaseModel):
+    main_image: Optional[str] = None
+    images: List[str] = []
+
+# ============== OTHER MODELS ==============
 
 class InventoryItemBase(BaseModel):
     product_id: str
@@ -125,7 +212,7 @@ class InventoryItemResponse(InventoryItemBase):
 class InventoryMovement(BaseModel):
     inventory_id: str
     quantity: float
-    movement_type: str  # "entrada", "salida", "merma", "ajuste"
+    movement_type: str
     reason: Optional[str] = None
 
 class SupplierBase(BaseModel):
@@ -145,7 +232,8 @@ class SupplierResponse(SupplierBase):
     created_at: str
 
 class PurchaseItemBase(BaseModel):
-    product_id: str
+    ingredient_id: Optional[str] = None  # Ahora puede ser ingrediente
+    product_id: Optional[str] = None  # o producto terminado
     quantity: float
     unit_cost: float
 
@@ -212,6 +300,7 @@ class DashboardStats(BaseModel):
     total_profit_month: float
     sales_count_today: int
     low_stock_alerts: int
+    low_ingredient_alerts: int
     top_products: List[dict]
     sales_by_cafeteria: List[dict]
     sales_trend: List[dict]
@@ -393,15 +482,414 @@ async def delete_category(category_id: str, current_user: dict = Depends(require
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
     return {"message": "Categoría eliminada"}
 
-# ============== PRODUCT ROUTES ==============
+# ============== INGREDIENT ROUTES ==============
+
+@api_router.get("/ingredients", response_model=List[IngredientResponse])
+async def get_ingredients(current_user: dict = Depends(get_current_user)):
+    ingredients = await db.ingredients.find({}, {"_id": 0}).to_list(1000)
+    suppliers = {s["id"]: s["name"] for s in await db.suppliers.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    
+    result = []
+    for ing in ingredients:
+        ing["supplier_name"] = suppliers.get(ing.get("supplier_id"), None)
+        result.append(IngredientResponse(**ing))
+    return result
+
+@api_router.post("/ingredients", response_model=IngredientResponse)
+async def create_ingredient(ingredient: IngredientCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    ingredient_id = str(uuid.uuid4())
+    ingredient_dict = ingredient.model_dump()
+    ingredient_dict["id"] = ingredient_id
+    ingredient_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.ingredients.insert_one(ingredient_dict)
+    
+    supplier_name = None
+    if ingredient.supplier_id:
+        supplier = await db.suppliers.find_one({"id": ingredient.supplier_id}, {"_id": 0, "name": 1})
+        supplier_name = supplier["name"] if supplier else None
+    
+    return IngredientResponse(**ingredient_dict, supplier_name=supplier_name)
+
+@api_router.put("/ingredients/{ingredient_id}", response_model=IngredientResponse)
+async def update_ingredient(ingredient_id: str, ingredient: IngredientBase, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    result = await db.ingredients.update_one({"id": ingredient_id}, {"$set": ingredient.model_dump()})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Ingrediente no encontrado")
+    
+    updated = await db.ingredients.find_one({"id": ingredient_id}, {"_id": 0})
+    supplier_name = None
+    if updated.get("supplier_id"):
+        supplier = await db.suppliers.find_one({"id": updated["supplier_id"]}, {"_id": 0, "name": 1})
+        supplier_name = supplier["name"] if supplier else None
+    
+    return IngredientResponse(**updated, supplier_name=supplier_name)
+
+@api_router.delete("/ingredients/{ingredient_id}")
+async def delete_ingredient(ingredient_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    result = await db.ingredients.delete_one({"id": ingredient_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Ingrediente no encontrado")
+    return {"message": "Ingrediente eliminado"}
+
+# ============== INGREDIENT INVENTORY ROUTES ==============
+
+@api_router.get("/ingredient-inventory", response_model=List[IngredientInventoryResponse])
+async def get_ingredient_inventory(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    elif current_user["role"] == UserRole.GERENTE and current_user.get("cafeteria_id"):
+        query["cafeteria_id"] = current_user["cafeteria_id"]
+    
+    inventory = await db.ingredient_inventory.find(query, {"_id": 0}).to_list(1000)
+    
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    
+    # Calculate average daily consumption from last 30 days
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    movements = await db.ingredient_movements.find({
+        "movement_type": "consumo_venta",
+        "created_at": {"$gte": thirty_days_ago}
+    }, {"_id": 0}).to_list(10000)
+    
+    daily_consumption = {}
+    for mov in movements:
+        key = f"{mov['ingredient_id']}_{mov.get('cafeteria_id', '')}"
+        if key not in daily_consumption:
+            daily_consumption[key] = 0
+        daily_consumption[key] += mov["quantity"]
+    
+    result = []
+    for item in inventory:
+        ing = ingredients.get(item["ingredient_id"], {})
+        item["ingredient_name"] = ing.get("name", "Desconocido")
+        item["unit"] = ing.get("unit", "unidad")
+        item["cost_per_unit"] = ing.get("cost_per_unit", 0)
+        item["cafeteria_name"] = cafeterias.get(item["cafeteria_id"], "Desconocida")
+        item["is_low_stock"] = item["quantity"] <= item["min_stock"]
+        
+        # Calculate days until stockout
+        key = f"{item['ingredient_id']}_{item['cafeteria_id']}"
+        avg_daily = daily_consumption.get(key, 0) / 30 if daily_consumption.get(key) else 0
+        item["days_until_stockout"] = round(item["quantity"] / avg_daily, 1) if avg_daily > 0 else None
+        
+        result.append(IngredientInventoryResponse(**item))
+    
+    return result
+
+@api_router.post("/ingredient-inventory", response_model=IngredientInventoryResponse)
+async def create_ingredient_inventory(item: IngredientInventoryCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    existing = await db.ingredient_inventory.find_one({
+        "ingredient_id": item.ingredient_id,
+        "cafeteria_id": item.cafeteria_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Ya existe inventario para este ingrediente en esta cafetería")
+    
+    item_id = str(uuid.uuid4())
+    item_dict = item.model_dump()
+    item_dict["id"] = item_id
+    item_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.ingredient_inventory.insert_one(item_dict)
+    
+    ingredient = await db.ingredients.find_one({"id": item.ingredient_id}, {"_id": 0})
+    cafeteria = await db.cafeterias.find_one({"id": item.cafeteria_id}, {"_id": 0, "name": 1})
+    
+    return IngredientInventoryResponse(
+        **item_dict,
+        ingredient_name=ingredient["name"] if ingredient else "Desconocido",
+        unit=ingredient.get("unit", "unidad") if ingredient else "unidad",
+        cost_per_unit=ingredient.get("cost_per_unit", 0) if ingredient else 0,
+        cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida",
+        is_low_stock=item.quantity <= item.min_stock
+    )
+
+@api_router.post("/ingredient-inventory/movement")
+async def record_ingredient_movement(movement: IngredientMovement, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    inventory_item = await db.ingredient_inventory.find_one({"id": movement.inventory_id})
+    if not inventory_item:
+        raise HTTPException(status_code=404, detail="Item de inventario no encontrado")
+    
+    new_quantity = inventory_item["quantity"]
+    if movement.movement_type in ["entrada"]:
+        new_quantity += movement.quantity
+    elif movement.movement_type in ["salida", "merma", "consumo_venta"]:
+        new_quantity -= movement.quantity
+    else:  # ajuste
+        new_quantity = movement.quantity
+    
+    if new_quantity < 0:
+        raise HTTPException(status_code=400, detail="No hay suficiente stock")
+    
+    await db.ingredient_inventory.update_one({"id": movement.inventory_id}, {"$set": {"quantity": new_quantity}})
+    
+    movement_log = {
+        "id": str(uuid.uuid4()),
+        "inventory_id": movement.inventory_id,
+        "ingredient_id": inventory_item["ingredient_id"],
+        "cafeteria_id": inventory_item["cafeteria_id"],
+        "quantity": movement.quantity,
+        "movement_type": movement.movement_type,
+        "reason": movement.reason,
+        "sale_id": movement.sale_id,
+        "previous_quantity": inventory_item["quantity"],
+        "new_quantity": new_quantity,
+        "created_by": current_user["user_id"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.ingredient_movements.insert_one(movement_log)
+    
+    return {"message": "Movimiento registrado", "new_quantity": new_quantity}
+
+@api_router.get("/ingredient-inventory/alerts")
+async def get_ingredient_alerts(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get ingredients that need restocking based on consumption rate"""
+    query = {}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    
+    inventory = await db.ingredient_inventory.find(query, {"_id": 0}).to_list(1000)
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    
+    # Calculate consumption
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    movements = await db.ingredient_movements.find({
+        "movement_type": "consumo_venta",
+        "created_at": {"$gte": thirty_days_ago}
+    }, {"_id": 0}).to_list(10000)
+    
+    daily_consumption = {}
+    for mov in movements:
+        key = f"{mov['ingredient_id']}_{mov.get('cafeteria_id', '')}"
+        if key not in daily_consumption:
+            daily_consumption[key] = 0
+        daily_consumption[key] += mov["quantity"]
+    
+    alerts = []
+    for item in inventory:
+        key = f"{item['ingredient_id']}_{item['cafeteria_id']}"
+        avg_daily = daily_consumption.get(key, 0) / 30 if daily_consumption.get(key) else 0
+        days_left = item["quantity"] / avg_daily if avg_daily > 0 else float('inf')
+        
+        ing = ingredients.get(item["ingredient_id"], {})
+        
+        # Alert if less than 7 days of stock or below minimum
+        if days_left < 7 or item["quantity"] <= item["min_stock"]:
+            alerts.append({
+                "ingredient_id": item["ingredient_id"],
+                "ingredient_name": ing.get("name", "Desconocido"),
+                "unit": ing.get("unit", "unidad"),
+                "cafeteria_id": item["cafeteria_id"],
+                "cafeteria_name": cafeterias.get(item["cafeteria_id"], "Desconocida"),
+                "current_stock": item["quantity"],
+                "min_stock": item["min_stock"],
+                "avg_daily_consumption": round(avg_daily, 2),
+                "days_until_stockout": round(days_left, 1) if days_left != float('inf') else None,
+                "suggested_order": round(avg_daily * 14 - item["quantity"], 2) if avg_daily > 0 else item["min_stock"] * 2,
+                "alert_type": "critical" if days_left < 3 else "warning"
+            })
+    
+    return sorted(alerts, key=lambda x: x.get("days_until_stockout") or float('inf'))
+
+# ============== RECIPE ROUTES ==============
+
+@api_router.get("/recipes", response_model=List[RecipeResponse])
+async def get_recipes(current_user: dict = Depends(get_current_user)):
+    recipes = await db.recipes.find({}, {"_id": 0}).to_list(1000)
+    products = {p["id"]: p["name"] for p in await db.products.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
+    result = []
+    for recipe in recipes:
+        recipe["product_name"] = products.get(recipe["product_id"], "Desconocido")
+        
+        # Enrich ingredients and calculate cost
+        calculated_cost = 0
+        enriched_ingredients = []
+        for ing_item in recipe.get("ingredients", []):
+            ing = ingredients.get(ing_item["ingredient_id"], {})
+            cost = ing.get("cost_per_unit", 0) * ing_item["quantity"]
+            calculated_cost += cost
+            enriched_ingredients.append({
+                "ingredient_id": ing_item["ingredient_id"],
+                "ingredient_name": ing.get("name", "Desconocido"),
+                "unit": ing.get("unit", "unidad"),
+                "quantity": ing_item["quantity"],
+                "cost_per_unit": ing.get("cost_per_unit", 0),
+                "subtotal": round(cost, 2)
+            })
+        
+        recipe["ingredients"] = enriched_ingredients
+        recipe["calculated_cost"] = round(calculated_cost / recipe.get("portions", 1), 2)
+        result.append(RecipeResponse(**recipe))
+    
+    return result
+
+@api_router.get("/recipes/product/{product_id}", response_model=Optional[RecipeResponse])
+async def get_recipe_by_product(product_id: str, current_user: dict = Depends(get_current_user)):
+    recipe = await db.recipes.find_one({"product_id": product_id}, {"_id": 0})
+    if not recipe:
+        return None
+    
+    product = await db.products.find_one({"id": product_id}, {"_id": 0, "name": 1})
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
+    recipe["product_name"] = product["name"] if product else "Desconocido"
+    
+    calculated_cost = 0
+    enriched_ingredients = []
+    for ing_item in recipe.get("ingredients", []):
+        ing = ingredients.get(ing_item["ingredient_id"], {})
+        cost = ing.get("cost_per_unit", 0) * ing_item["quantity"]
+        calculated_cost += cost
+        enriched_ingredients.append({
+            "ingredient_id": ing_item["ingredient_id"],
+            "ingredient_name": ing.get("name", "Desconocido"),
+            "unit": ing.get("unit", "unidad"),
+            "quantity": ing_item["quantity"],
+            "cost_per_unit": ing.get("cost_per_unit", 0),
+            "subtotal": round(cost, 2)
+        })
+    
+    recipe["ingredients"] = enriched_ingredients
+    recipe["calculated_cost"] = round(calculated_cost / recipe.get("portions", 1), 2)
+    
+    return RecipeResponse(**recipe)
+
+@api_router.post("/recipes", response_model=RecipeResponse)
+async def create_recipe(recipe: RecipeCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    # Check if recipe already exists for this product
+    existing = await db.recipes.find_one({"product_id": recipe.product_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Ya existe una receta para este producto. Use PUT para actualizar.")
+    
+    recipe_id = str(uuid.uuid4())
+    recipe_dict = recipe.model_dump()
+    recipe_dict["id"] = recipe_id
+    recipe_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.recipes.insert_one(recipe_dict)
+    
+    # Calculate cost and update product
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    calculated_cost = 0
+    enriched_ingredients = []
+    
+    for ing_item in recipe.ingredients:
+        ing = ingredients.get(ing_item.ingredient_id, {})
+        cost = ing.get("cost_per_unit", 0) * ing_item.quantity
+        calculated_cost += cost
+        enriched_ingredients.append({
+            "ingredient_id": ing_item.ingredient_id,
+            "ingredient_name": ing.get("name", "Desconocido"),
+            "unit": ing.get("unit", "unidad"),
+            "quantity": ing_item.quantity,
+            "cost_per_unit": ing.get("cost_per_unit", 0),
+            "subtotal": round(cost, 2)
+        })
+    
+    cost_per_portion = calculated_cost / recipe.portions
+    
+    # Update product cost
+    await db.products.update_one({"id": recipe.product_id}, {"$set": {"cost": round(cost_per_portion, 2)}})
+    
+    product = await db.products.find_one({"id": recipe.product_id}, {"_id": 0, "name": 1})
+    
+    return RecipeResponse(
+        id=recipe_id,
+        product_id=recipe.product_id,
+        product_name=product["name"] if product else "Desconocido",
+        ingredients=enriched_ingredients,
+        portions=recipe.portions,
+        auto_deduct=recipe.auto_deduct,
+        calculated_cost=round(cost_per_portion, 2),
+        created_at=recipe_dict["created_at"]
+    )
+
+@api_router.put("/recipes/{recipe_id}", response_model=RecipeResponse)
+async def update_recipe(recipe_id: str, recipe: RecipeCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    existing = await db.recipes.find_one({"id": recipe_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Receta no encontrada")
+    
+    recipe_dict = recipe.model_dump()
+    recipe_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.recipes.update_one({"id": recipe_id}, {"$set": recipe_dict})
+    
+    # Recalculate cost
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    calculated_cost = 0
+    enriched_ingredients = []
+    
+    for ing_item in recipe.ingredients:
+        ing = ingredients.get(ing_item.ingredient_id, {})
+        cost = ing.get("cost_per_unit", 0) * ing_item.quantity
+        calculated_cost += cost
+        enriched_ingredients.append({
+            "ingredient_id": ing_item.ingredient_id,
+            "ingredient_name": ing.get("name", "Desconocido"),
+            "unit": ing.get("unit", "unidad"),
+            "quantity": ing_item.quantity,
+            "cost_per_unit": ing.get("cost_per_unit", 0),
+            "subtotal": round(cost, 2)
+        })
+    
+    cost_per_portion = calculated_cost / recipe.portions
+    await db.products.update_one({"id": recipe.product_id}, {"$set": {"cost": round(cost_per_portion, 2)}})
+    
+    product = await db.products.find_one({"id": recipe.product_id}, {"_id": 0, "name": 1})
+    
+    return RecipeResponse(
+        id=recipe_id,
+        product_id=recipe.product_id,
+        product_name=product["name"] if product else "Desconocido",
+        ingredients=enriched_ingredients,
+        portions=recipe.portions,
+        auto_deduct=recipe.auto_deduct,
+        calculated_cost=round(cost_per_portion, 2),
+        created_at=existing.get("created_at", "")
+    )
+
+@api_router.delete("/recipes/{recipe_id}")
+async def delete_recipe(recipe_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    result = await db.recipes.delete_one({"id": recipe_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Receta no encontrada")
+    return {"message": "Receta eliminada"}
+
+# ============== PRODUCT ROUTES (UPDATED) ==============
 
 @api_router.get("/products", response_model=List[ProductResponse])
 async def get_products(current_user: dict = Depends(get_current_user)):
     products = await db.products.find({}, {"_id": 0}).to_list(1000)
+    recipes = {r["product_id"]: r for r in await db.recipes.find({}, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
     result = []
     for p in products:
+        recipe = recipes.get(p["id"])
+        recipe_cost = 0
+        has_recipe = False
+        
+        if recipe:
+            has_recipe = True
+            for ing_item in recipe.get("ingredients", []):
+                ing = ingredients.get(ing_item["ingredient_id"], {})
+                recipe_cost += ing.get("cost_per_unit", 0) * ing_item["quantity"]
+            recipe_cost = recipe_cost / recipe.get("portions", 1)
+        
         margin = ((p["price"] - p["cost"]) / p["price"] * 100) if p["price"] > 0 else 0
-        result.append(ProductResponse(**p, margin=round(margin, 2)))
+        result.append(ProductResponse(
+            **p,
+            margin=round(margin, 2),
+            recipe_cost=round(recipe_cost, 2),
+            has_recipe=has_recipe
+        ))
     return result
 
 @api_router.post("/products", response_model=ProductResponse)
@@ -413,7 +901,7 @@ async def create_product(product: ProductCreate, current_user: dict = Depends(re
     
     await db.products.insert_one(product_dict)
     margin = ((product.price - product.cost) / product.price * 100) if product.price > 0 else 0
-    return ProductResponse(**product_dict, margin=round(margin, 2))
+    return ProductResponse(**product_dict, margin=round(margin, 2), recipe_cost=0, has_recipe=False)
 
 @api_router.put("/products/{product_id}", response_model=ProductResponse)
 async def update_product(product_id: str, product: ProductBase, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
@@ -421,15 +909,107 @@ async def update_product(product_id: str, product: ProductBase, current_user: di
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     updated = await db.products.find_one({"id": product_id}, {"_id": 0})
+    
+    recipe = await db.recipes.find_one({"product_id": product_id}, {"_id": 0})
+    recipe_cost = 0
+    has_recipe = False
+    
+    if recipe:
+        has_recipe = True
+        ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+        for ing_item in recipe.get("ingredients", []):
+            ing = ingredients.get(ing_item["ingredient_id"], {})
+            recipe_cost += ing.get("cost_per_unit", 0) * ing_item["quantity"]
+        recipe_cost = recipe_cost / recipe.get("portions", 1)
+    
     margin = ((updated["price"] - updated["cost"]) / updated["price"] * 100) if updated["price"] > 0 else 0
-    return ProductResponse(**updated, margin=round(margin, 2))
+    return ProductResponse(**updated, margin=round(margin, 2), recipe_cost=round(recipe_cost, 2), has_recipe=has_recipe)
+
+@api_router.put("/products/{product_id}/images")
+async def update_product_images(product_id: str, images: ProductImageUpdate, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Update product images (admin only)"""
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    update_data = {}
+    if images.main_image is not None:
+        update_data["main_image"] = images.main_image
+    if images.images is not None:
+        # Limit to 3 additional images
+        update_data["images"] = images.images[:3]
+    
+    await db.products.update_one({"id": product_id}, {"$set": update_data})
+    return {"message": "Imágenes actualizadas"}
 
 @api_router.delete("/products/{product_id}")
 async def delete_product(product_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
     result = await db.products.delete_one({"id": product_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
+    # Also delete associated recipe
+    await db.recipes.delete_one({"product_id": product_id})
     return {"message": "Producto eliminado"}
+
+# ============== CATALOG EXPORT ROUTES ==============
+
+@api_router.get("/catalog/export/{cafeteria_id}")
+async def export_catalog(cafeteria_id: str, format: str = "json", current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    """Export product catalog for a specific cafeteria"""
+    cafeteria = await db.cafeterias.find_one({"id": cafeteria_id}, {"_id": 0})
+    if not cafeteria:
+        raise HTTPException(status_code=404, detail="Cafetería no encontrada")
+    
+    products = await db.products.find({"is_active": True}, {"_id": 0}).to_list(1000)
+    categories = {c["id"]: c["name"] for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
+    
+    # Get inventory for this cafeteria
+    inventory = {i["product_id"]: i["quantity"] for i in await db.inventory.find({"cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)}
+    
+    catalog = {
+        "cafeteria": {
+            "id": cafeteria["id"],
+            "name": cafeteria["name"],
+            "address": cafeteria["address"],
+            "phone": cafeteria.get("phone")
+        },
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "products": []
+    }
+    
+    for p in products:
+        product_data = {
+            "id": p["id"],
+            "name": p["name"],
+            "description": p.get("description", ""),
+            "category": categories.get(p["category_id"], "Sin categoría"),
+            "price": p["price"],
+            "cost": p["cost"],
+            "main_image": p.get("main_image"),
+            "images": p.get("images", []),
+            "stock": inventory.get(p["id"], 0),
+            "is_available": inventory.get(p["id"], 0) > 0
+        }
+        catalog["products"].append(product_data)
+    
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Nombre", "Descripción", "Categoría", "Precio", "Costo", "Stock", "Disponible", "Imagen Principal"])
+        for p in catalog["products"]:
+            writer.writerow([
+                p["id"], p["name"], p["description"], p["category"],
+                p["price"], p["cost"], p["stock"], "Sí" if p["is_available"] else "No",
+                p["main_image"] or ""
+            ])
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=catalogo_{cafeteria['name']}_{datetime.now().strftime('%Y%m%d')}.csv"}
+        )
+    
+    return catalog
 
 # ============== INVENTORY ROUTES ==============
 
@@ -443,7 +1023,6 @@ async def get_inventory(cafeteria_id: Optional[str] = None, current_user: dict =
     
     inventory = await db.inventory.find(query, {"_id": 0}).to_list(1000)
     
-    # Enrich with product and cafeteria names
     products = {p["id"]: p["name"] for p in await db.products.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)}
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
@@ -458,7 +1037,6 @@ async def get_inventory(cafeteria_id: Optional[str] = None, current_user: dict =
 
 @api_router.post("/inventory", response_model=InventoryItemResponse)
 async def create_inventory_item(item: InventoryItemCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
-    # Check if item already exists for this product-cafeteria combination
     existing = await db.inventory.find_one({
         "product_id": item.product_id,
         "cafeteria_id": item.cafeteria_id
@@ -473,7 +1051,6 @@ async def create_inventory_item(item: InventoryItemCreate, current_user: dict = 
     
     await db.inventory.insert_one(item_dict)
     
-    # Get names
     product = await db.products.find_one({"id": item.product_id}, {"_id": 0, "name": 1})
     cafeteria = await db.cafeterias.find_one({"id": item.cafeteria_id}, {"_id": 0, "name": 1})
     
@@ -495,7 +1072,7 @@ async def record_inventory_movement(movement: InventoryMovement, current_user: d
         new_quantity += movement.quantity
     elif movement.movement_type in ["salida", "merma"]:
         new_quantity -= movement.quantity
-    else:  # ajuste
+    else:
         new_quantity = movement.quantity
     
     if new_quantity < 0:
@@ -503,7 +1080,6 @@ async def record_inventory_movement(movement: InventoryMovement, current_user: d
     
     await db.inventory.update_one({"id": movement.inventory_id}, {"$set": {"quantity": new_quantity}})
     
-    # Log movement
     movement_log = {
         "id": str(uuid.uuid4()),
         "inventory_id": movement.inventory_id,
@@ -560,7 +1136,7 @@ async def delete_supplier(supplier_id: str, current_user: dict = Depends(require
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
     return {"message": "Proveedor eliminado"}
 
-# ============== PURCHASE ROUTES ==============
+# ============== PURCHASE ROUTES (UPDATED for ingredients) ==============
 
 @api_router.get("/purchases", response_model=List[PurchaseResponse])
 async def get_purchases(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
@@ -572,7 +1148,6 @@ async def get_purchases(cafeteria_id: Optional[str] = None, current_user: dict =
     
     purchases = await db.purchases.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     
-    # Enrich with names
     suppliers = {s["id"]: s["name"] for s in await db.suppliers.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
@@ -588,33 +1163,76 @@ async def get_purchases(cafeteria_id: Optional[str] = None, current_user: dict =
 async def create_purchase(purchase: PurchaseCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     purchase_id = str(uuid.uuid4())
     
-    # Calculate total and enrich items
     total = 0
     enriched_items = []
     products = {p["id"]: p for p in await db.products.find({}, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
     
     for item in purchase.items:
-        product = products.get(item.product_id)
         item_total = item.quantity * item.unit_cost
         total += item_total
+        
+        item_name = "Desconocido"
+        item_type = "unknown"
+        
+        if item.ingredient_id:
+            ingredient = ingredients.get(item.ingredient_id)
+            item_name = ingredient["name"] if ingredient else "Desconocido"
+            item_type = "ingredient"
+            
+            # Update ingredient inventory
+            inv_item = await db.ingredient_inventory.find_one({
+                "ingredient_id": item.ingredient_id,
+                "cafeteria_id": purchase.cafeteria_id
+            })
+            if inv_item:
+                await db.ingredient_inventory.update_one(
+                    {"id": inv_item["id"]},
+                    {"$inc": {"quantity": item.quantity}}
+                )
+            else:
+                # Create new inventory item
+                await db.ingredient_inventory.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "ingredient_id": item.ingredient_id,
+                    "cafeteria_id": purchase.cafeteria_id,
+                    "quantity": item.quantity,
+                    "min_stock": 10.0,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+            
+            # Update ingredient cost if different
+            if ingredient and item.unit_cost != ingredient.get("cost_per_unit", 0):
+                await db.ingredients.update_one(
+                    {"id": item.ingredient_id},
+                    {"$set": {"cost_per_unit": item.unit_cost}}
+                )
+        
+        elif item.product_id:
+            product = products.get(item.product_id)
+            item_name = product["name"] if product else "Desconocido"
+            item_type = "product"
+            
+            # Update product inventory
+            inv_item = await db.inventory.find_one({
+                "product_id": item.product_id,
+                "cafeteria_id": purchase.cafeteria_id
+            })
+            if inv_item:
+                await db.inventory.update_one(
+                    {"id": inv_item["id"]},
+                    {"$inc": {"quantity": item.quantity}}
+                )
+        
         enriched_items.append({
+            "ingredient_id": item.ingredient_id,
             "product_id": item.product_id,
-            "product_name": product["name"] if product else "Desconocido",
+            "item_name": item_name,
+            "item_type": item_type,
             "quantity": item.quantity,
             "unit_cost": item.unit_cost,
             "total": item_total
         })
-        
-        # Update inventory
-        inv_item = await db.inventory.find_one({
-            "product_id": item.product_id,
-            "cafeteria_id": purchase.cafeteria_id
-        })
-        if inv_item:
-            await db.inventory.update_one(
-                {"id": inv_item["id"]},
-                {"$inc": {"quantity": item.quantity}}
-            )
     
     purchase_dict = {
         "id": purchase_id,
@@ -629,7 +1247,6 @@ async def create_purchase(purchase: PurchaseCreate, current_user: dict = Depends
     
     await db.purchases.insert_one(purchase_dict)
     
-    # Get names
     supplier = await db.suppliers.find_one({"id": purchase.supplier_id}, {"_id": 0, "name": 1})
     cafeteria = await db.cafeterias.find_one({"id": purchase.cafeteria_id}, {"_id": 0, "name": 1})
     
@@ -639,7 +1256,7 @@ async def create_purchase(purchase: PurchaseCreate, current_user: dict = Depends
         cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida"
     )
 
-# ============== SALES ROUTES ==============
+# ============== SALES ROUTES (UPDATED with ingredient deduction) ==============
 
 @api_router.get("/sales", response_model=List[SaleResponse])
 async def get_sales(
@@ -664,7 +1281,6 @@ async def get_sales(
     
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
-    # Enrich with cafeteria names
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     result = []
@@ -678,13 +1294,14 @@ async def get_sales(
 async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current_user)):
     sale_id = str(uuid.uuid4())
     
-    # Calculate totals
     subtotal = sum(item.subtotal for item in sale.items)
-    tax = subtotal * 0.16  # 16% IVA
+    tax = subtotal * 0.16
     total = subtotal + tax
     
-    # Calculate costs
     products = {p["id"]: p for p in await db.products.find({}, {"_id": 0}).to_list(1000)}
+    recipes = {r["product_id"]: r for r in await db.recipes.find({}, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
     cost_total = 0
     enriched_items = []
     
@@ -692,6 +1309,7 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
         product = products.get(item.product_id)
         item_cost = (product["cost"] if product else 0) * item.quantity
         cost_total += item_cost
+        
         enriched_items.append({
             "product_id": item.product_id,
             "product_name": item.product_name,
@@ -701,11 +1319,48 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
             "cost": item_cost
         })
         
-        # Update inventory (reduce stock)
+        # Update product inventory
         await db.inventory.update_one(
             {"product_id": item.product_id, "cafeteria_id": sale.cafeteria_id},
             {"$inc": {"quantity": -item.quantity}}
         )
+        
+        # Deduct ingredients if recipe exists and auto_deduct is enabled
+        recipe = recipes.get(item.product_id)
+        if recipe and recipe.get("auto_deduct", True):
+            for ing_item in recipe.get("ingredients", []):
+                # Calculate quantity to deduct (per portion * quantity sold)
+                qty_to_deduct = (ing_item["quantity"] / recipe.get("portions", 1)) * item.quantity
+                
+                # Find ingredient inventory for this cafeteria
+                ing_inv = await db.ingredient_inventory.find_one({
+                    "ingredient_id": ing_item["ingredient_id"],
+                    "cafeteria_id": sale.cafeteria_id
+                })
+                
+                if ing_inv:
+                    # Deduct from inventory
+                    new_qty = max(0, ing_inv["quantity"] - qty_to_deduct)
+                    await db.ingredient_inventory.update_one(
+                        {"id": ing_inv["id"]},
+                        {"$set": {"quantity": new_qty}}
+                    )
+                    
+                    # Log the movement
+                    await db.ingredient_movements.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "inventory_id": ing_inv["id"],
+                        "ingredient_id": ing_item["ingredient_id"],
+                        "cafeteria_id": sale.cafeteria_id,
+                        "quantity": qty_to_deduct,
+                        "movement_type": "consumo_venta",
+                        "reason": f"Venta de {item.quantity}x {item.product_name}",
+                        "sale_id": sale_id,
+                        "previous_quantity": ing_inv["quantity"],
+                        "new_quantity": new_qty,
+                        "created_by": current_user["user_id"],
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
     
     profit = subtotal - cost_total
     
@@ -727,7 +1382,6 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
     
     await db.sales.insert_one(sale_dict)
     
-    # Get cafeteria name
     cafeteria = await db.cafeterias.find_one({"id": sale.cafeteria_id}, {"_id": 0, "name": 1})
     
     return SaleResponse(**sale_dict, cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida")
@@ -745,10 +1399,8 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
         query["cafeteria_id"] = current_user["cafeteria_id"]
     
-    # Get all sales
     all_sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
     
-    # Filter by date
     today_str = today.isoformat()
     month_str = month_start.isoformat()
     
@@ -760,13 +1412,17 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     total_profit_today = sum(s["profit"] for s in today_sales)
     total_profit_month = sum(s["profit"] for s in month_sales)
     
-    # Low stock alerts
+    # Product inventory alerts
     inv_query = {}
     if cafeteria_id:
         inv_query["cafeteria_id"] = cafeteria_id
     
     inventory = await db.inventory.find(inv_query, {"_id": 0}).to_list(1000)
     low_stock_alerts = sum(1 for i in inventory if i["quantity"] <= i["min_stock"])
+    
+    # Ingredient inventory alerts
+    ing_inventory = await db.ingredient_inventory.find(inv_query, {"_id": 0}).to_list(1000)
+    low_ingredient_alerts = sum(1 for i in ing_inventory if i["quantity"] <= i["min_stock"])
     
     # Top products
     product_sales = {}
@@ -792,7 +1448,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     
     sales_by_cafeteria = list(cafe_sales.values())
     
-    # Sales trend (last 7 days)
+    # Sales trend
     sales_trend = []
     for i in range(6, -1, -1):
         day = today - timedelta(days=i)
@@ -813,6 +1469,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
         total_profit_month=round(total_profit_month, 2),
         sales_count_today=len(today_sales),
         low_stock_alerts=low_stock_alerts,
+        low_ingredient_alerts=low_ingredient_alerts,
         top_products=top_products,
         sales_by_cafeteria=sales_by_cafeteria,
         sales_trend=sales_trend
@@ -868,14 +1525,97 @@ async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: 
         "transaction_count": len(sales)
     }
 
+@api_router.get("/reports/ingredient-consumption")
+async def get_ingredient_consumption(cafeteria_id: Optional[str] = None, days: int = 30, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    """Report of ingredient consumption over time"""
+    start_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    
+    query = {"movement_type": "consumo_venta", "created_at": {"$gte": start_date}}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    
+    movements = await db.ingredient_movements.find(query, {"_id": 0}).to_list(10000)
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
+    consumption = {}
+    for mov in movements:
+        ing_id = mov["ingredient_id"]
+        if ing_id not in consumption:
+            ing = ingredients.get(ing_id, {})
+            consumption[ing_id] = {
+                "ingredient_id": ing_id,
+                "ingredient_name": ing.get("name", "Desconocido"),
+                "unit": ing.get("unit", "unidad"),
+                "total_consumed": 0,
+                "total_cost": 0
+            }
+        consumption[ing_id]["total_consumed"] += mov["quantity"]
+        consumption[ing_id]["total_cost"] += mov["quantity"] * ingredients.get(ing_id, {}).get("cost_per_unit", 0)
+    
+    result = list(consumption.values())
+    for item in result:
+        item["total_consumed"] = round(item["total_consumed"], 2)
+        item["total_cost"] = round(item["total_cost"], 2)
+    
+    return sorted(result, key=lambda x: x["total_cost"], reverse=True)
+
+@api_router.get("/reports/theoretical-vs-actual")
+async def get_theoretical_vs_actual(cafeteria_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    """Compare theoretical inventory (based on sales) vs actual inventory"""
+    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    
+    # Get current inventory
+    actual_inventory = await db.ingredient_inventory.find({"cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)
+    
+    # Calculate theoretical consumption from all sales
+    all_movements = await db.ingredient_movements.find({
+        "cafeteria_id": cafeteria_id,
+        "movement_type": "consumo_venta"
+    }, {"_id": 0}).to_list(50000)
+    
+    theoretical_consumed = {}
+    for mov in all_movements:
+        ing_id = mov["ingredient_id"]
+        if ing_id not in theoretical_consumed:
+            theoretical_consumed[ing_id] = 0
+        theoretical_consumed[ing_id] += mov["quantity"]
+    
+    # Compare
+    comparison = []
+    for inv_item in actual_inventory:
+        ing = ingredients.get(inv_item["ingredient_id"], {})
+        theoretical = theoretical_consumed.get(inv_item["ingredient_id"], 0)
+        
+        # Get all entries (purchases)
+        entries = await db.ingredient_movements.find({
+            "cafeteria_id": cafeteria_id,
+            "ingredient_id": inv_item["ingredient_id"],
+            "movement_type": "entrada"
+        }, {"_id": 0}).to_list(1000)
+        total_entries = sum(e["quantity"] for e in entries)
+        
+        theoretical_remaining = total_entries - theoretical
+        actual_remaining = inv_item["quantity"]
+        variance = actual_remaining - theoretical_remaining
+        
+        comparison.append({
+            "ingredient_id": inv_item["ingredient_id"],
+            "ingredient_name": ing.get("name", "Desconocido"),
+            "unit": ing.get("unit", "unidad"),
+            "total_purchased": round(total_entries, 2),
+            "theoretical_consumed": round(theoretical, 2),
+            "theoretical_remaining": round(theoretical_remaining, 2),
+            "actual_remaining": round(actual_remaining, 2),
+            "variance": round(variance, 2),
+            "variance_percent": round((variance / theoretical_remaining * 100) if theoretical_remaining > 0 else 0, 2)
+        })
+    
+    return comparison
+
 # ============== CLIP INTEGRATION (MOCK) ==============
 
 @api_router.post("/clip/sync")
 async def sync_clip_transactions(current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
-    """
-    Mock endpoint for Clip POS integration.
-    In production, this would connect to Clip's API to sync transactions.
-    """
     return {
         "message": "Sincronización con Clip completada (MOCK)",
         "note": "Para integración real, configure las credenciales de Clip en developer.clip.mx",
@@ -884,7 +1624,6 @@ async def sync_clip_transactions(current_user: dict = Depends(require_roles([Use
 
 @api_router.get("/clip/status")
 async def get_clip_status(current_user: dict = Depends(get_current_user)):
-    """Check Clip integration status"""
     clip_api_key = os.environ.get("CLIP_API_KEY")
     return {
         "connected": bool(clip_api_key),
@@ -895,9 +1634,6 @@ async def get_clip_status(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/seed")
 async def seed_data():
-    """Seed initial data for demo purposes"""
-    
-    # Check if already seeded
     existing_cafes = await db.cafeterias.count_documents({})
     if existing_cafes > 0:
         return {"message": "Datos ya existentes"}
@@ -918,9 +1654,9 @@ async def seed_data():
     
     # Create cafeterias
     cafeterias_data = [
-        {"name": "Café Central", "address": "Av. Reforma 123, Centro", "phone": "555-0001"},
-        {"name": "Café Norte", "address": "Av. Insurgentes Norte 456", "phone": "555-0002"},
-        {"name": "Café Sur", "address": "Av. Universidad 789", "phone": "555-0003"}
+        {"name": "Doré Central", "address": "Av. Reforma 123, Centro", "phone": "555-0001"},
+        {"name": "Doré Norte", "address": "Av. Insurgentes Norte 456", "phone": "555-0002"},
+        {"name": "Doré Sur", "address": "Av. Universidad 789", "phone": "555-0003"}
     ]
     
     cafe_ids = []
@@ -948,15 +1684,59 @@ async def seed_data():
         cat_ids.append(cat_id)
         await db.categories.insert_one({"id": cat_id, **cat})
     
-    # Create products
+    # Create suppliers
+    suppliers_data = [
+        {"name": "Proveedora de Café MX", "contact_name": "Juan Pérez", "phone": "555-1001"},
+        {"name": "Lácteos del Valle", "contact_name": "María López", "phone": "555-1002"},
+        {"name": "Panadería Artesanal", "contact_name": "Carlos García", "phone": "555-1003"}
+    ]
+    
+    supplier_ids = []
+    for supplier in suppliers_data:
+        supplier_id = str(uuid.uuid4())
+        supplier_ids.append(supplier_id)
+        await db.suppliers.insert_one({
+            **supplier,
+            "id": supplier_id,
+            "email": None,
+            "address": None,
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    
+    # Create ingredients
+    ingredients_data = [
+        {"name": "Café en grano", "unit": "kg", "cost_per_unit": 350.00, "supplier_id": supplier_ids[0], "min_stock": 5},
+        {"name": "Leche entera", "unit": "litro", "cost_per_unit": 28.00, "supplier_id": supplier_ids[1], "min_stock": 20},
+        {"name": "Leche deslactosada", "unit": "litro", "cost_per_unit": 32.00, "supplier_id": supplier_ids[1], "min_stock": 10},
+        {"name": "Azúcar", "unit": "kg", "cost_per_unit": 25.00, "supplier_id": None, "min_stock": 5},
+        {"name": "Jarabe de vainilla", "unit": "litro", "cost_per_unit": 180.00, "supplier_id": None, "min_stock": 3},
+        {"name": "Jarabe de caramelo", "unit": "litro", "cost_per_unit": 180.00, "supplier_id": None, "min_stock": 3},
+        {"name": "Chocolate en polvo", "unit": "kg", "cost_per_unit": 150.00, "supplier_id": None, "min_stock": 2},
+        {"name": "Crema batida", "unit": "litro", "cost_per_unit": 85.00, "supplier_id": supplier_ids[1], "min_stock": 5},
+        {"name": "Hielo", "unit": "kg", "cost_per_unit": 15.00, "supplier_id": None, "min_stock": 10},
+    ]
+    
+    ingredient_ids = []
+    for ing in ingredients_data:
+        ing_id = str(uuid.uuid4())
+        ingredient_ids.append(ing_id)
+        await db.ingredients.insert_one({
+            **ing,
+            "id": ing_id,
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    
+    # Create products with costs
     products_data = [
         {"name": "Americano", "category_id": cat_ids[0], "price": 45.00, "cost": 8.00},
-        {"name": "Latte", "category_id": cat_ids[0], "price": 55.00, "cost": 12.00},
-        {"name": "Cappuccino", "category_id": cat_ids[0], "price": 55.00, "cost": 12.00},
+        {"name": "Latte", "category_id": cat_ids[0], "price": 55.00, "cost": 15.00},
+        {"name": "Cappuccino", "category_id": cat_ids[0], "price": 55.00, "cost": 15.00},
         {"name": "Espresso", "category_id": cat_ids[0], "price": 35.00, "cost": 6.00},
-        {"name": "Mocha", "category_id": cat_ids[0], "price": 65.00, "cost": 15.00},
-        {"name": "Frappé Mocha", "category_id": cat_ids[1], "price": 75.00, "cost": 18.00},
-        {"name": "Frappé Caramelo", "category_id": cat_ids[1], "price": 75.00, "cost": 18.00},
+        {"name": "Mocha", "category_id": cat_ids[0], "price": 65.00, "cost": 18.00},
+        {"name": "Frappé Mocha", "category_id": cat_ids[1], "price": 75.00, "cost": 22.00},
+        {"name": "Frappé Caramelo", "category_id": cat_ids[1], "price": 75.00, "cost": 22.00},
         {"name": "Smoothie Frutas", "category_id": cat_ids[1], "price": 65.00, "cost": 20.00},
         {"name": "Croissant", "category_id": cat_ids[2], "price": 45.00, "cost": 15.00},
         {"name": "Panini Jamón", "category_id": cat_ids[2], "price": 85.00, "cost": 35.00},
@@ -973,11 +1753,65 @@ async def seed_data():
             "id": prod_id,
             "description": "",
             "is_active": True,
+            "main_image": None,
+            "images": [],
             "created_at": datetime.now(timezone.utc).isoformat()
         })
     
-    # Create inventory for each cafeteria
+    # Create recipes for some products
+    recipes_data = [
+        {
+            "product_id": prod_ids[0],  # Americano
+            "ingredients": [
+                {"ingredient_id": ingredient_ids[0], "quantity": 0.018},  # 18g café
+            ],
+            "portions": 1,
+            "auto_deduct": True
+        },
+        {
+            "product_id": prod_ids[1],  # Latte
+            "ingredients": [
+                {"ingredient_id": ingredient_ids[0], "quantity": 0.018},  # 18g café
+                {"ingredient_id": ingredient_ids[1], "quantity": 0.200},  # 200ml leche
+            ],
+            "portions": 1,
+            "auto_deduct": True
+        },
+        {
+            "product_id": prod_ids[4],  # Mocha
+            "ingredients": [
+                {"ingredient_id": ingredient_ids[0], "quantity": 0.018},  # 18g café
+                {"ingredient_id": ingredient_ids[1], "quantity": 0.150},  # 150ml leche
+                {"ingredient_id": ingredient_ids[6], "quantity": 0.020},  # 20g chocolate
+                {"ingredient_id": ingredient_ids[7], "quantity": 0.030},  # 30ml crema
+            ],
+            "portions": 1,
+            "auto_deduct": True
+        },
+        {
+            "product_id": prod_ids[5],  # Frappé Mocha
+            "ingredients": [
+                {"ingredient_id": ingredient_ids[0], "quantity": 0.018},  # 18g café
+                {"ingredient_id": ingredient_ids[1], "quantity": 0.150},  # 150ml leche
+                {"ingredient_id": ingredient_ids[6], "quantity": 0.025},  # 25g chocolate
+                {"ingredient_id": ingredient_ids[8], "quantity": 0.100},  # 100g hielo
+                {"ingredient_id": ingredient_ids[7], "quantity": 0.040},  # 40ml crema
+            ],
+            "portions": 1,
+            "auto_deduct": True
+        },
+    ]
+    
+    for recipe in recipes_data:
+        await db.recipes.insert_one({
+            **recipe,
+            "id": str(uuid.uuid4()),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+    
+    # Create inventory for each cafeteria (products and ingredients)
     for cafe_id in cafe_ids:
+        # Product inventory
         for prod_id in prod_ids:
             await db.inventory.insert_one({
                 "id": str(uuid.uuid4()),
@@ -988,25 +1822,20 @@ async def seed_data():
                 "unit": "unidad",
                 "created_at": datetime.now(timezone.utc).isoformat()
             })
+        
+        # Ingredient inventory
+        for i, ing_id in enumerate(ingredient_ids):
+            initial_qty = [10, 50, 25, 10, 5, 5, 3, 10, 20][i]  # Different initial quantities
+            await db.ingredient_inventory.insert_one({
+                "id": str(uuid.uuid4()),
+                "ingredient_id": ing_id,
+                "cafeteria_id": cafe_id,
+                "quantity": initial_qty,
+                "min_stock": ingredients_data[i]["min_stock"],
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
     
-    # Create suppliers
-    suppliers_data = [
-        {"name": "Proveedora de Café MX", "contact_name": "Juan Pérez", "phone": "555-1001"},
-        {"name": "Lácteos del Valle", "contact_name": "María López", "phone": "555-1002"},
-        {"name": "Panadería Artesanal", "contact_name": "Carlos García", "phone": "555-1003"}
-    ]
-    
-    for supplier in suppliers_data:
-        await db.suppliers.insert_one({
-            **supplier,
-            "id": str(uuid.uuid4()),
-            "email": None,
-            "address": None,
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-    
-    # Create some sample sales
+    # Create sample sales
     import random
     for cafe_id in cafe_ids:
         for day_offset in range(7):
@@ -1054,7 +1883,7 @@ async def seed_data():
 # Root endpoint
 @api_router.get("/")
 async def root():
-    return {"message": "CaféControl API v1.0"}
+    return {"message": "Doré API v1.0"}
 
 # Include router
 app.include_router(api_router)

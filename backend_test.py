@@ -232,9 +232,91 @@ class CafeControlAPITester:
         # Get users
         self.run_test("Get Users", "GET", "users", 200)
 
+    def test_ingredients(self):
+        """Test ingredient endpoints"""
+        print("\n🌾 Testing Ingredients...")
+        
+        # Get ingredients
+        success, ingredients = self.run_test("Get Ingredients", "GET", "ingredients", 200)
+        if success:
+            self.ingredients = ingredients
+            self.log_test("Ingredients Data", len(ingredients) >= 9, f"Found {len(ingredients)} ingredients (expected 9+)")
+            
+            # Check ingredient structure
+            if ingredients:
+                ing = ingredients[0]
+                required_fields = ['id', 'name', 'unit', 'cost_per_unit']
+                missing_fields = [field for field in required_fields if field not in ing]
+                self.log_test("Ingredient Structure", not missing_fields, f"Fields: {list(ing.keys())}")
+            return True
+        return False
+
+    def test_recipes(self):
+        """Test recipe endpoints"""
+        print("\n👨‍🍳 Testing Recipes...")
+        
+        # Get recipes
+        success, recipes = self.run_test("Get Recipes", "GET", "recipes", 200)
+        if success:
+            self.recipes = recipes
+            self.log_test("Recipes Data", len(recipes) >= 4, f"Found {len(recipes)} recipes (expected 4+)")
+            
+            # Check recipe structure and calculated costs
+            if recipes:
+                recipe = recipes[0]
+                required_fields = ['id', 'product_id', 'ingredients', 'calculated_cost', 'portions']
+                missing_fields = [field for field in required_fields if field not in recipe]
+                self.log_test("Recipe Structure", not missing_fields, f"Fields: {list(recipe.keys())}")
+                
+                # Check if calculated cost is present and > 0
+                has_cost = recipe.get('calculated_cost', 0) > 0
+                self.log_test("Recipe Cost Calculation", has_cost, f"Cost: ${recipe.get('calculated_cost', 0)}")
+            return True
+        return False
+
+    def test_ingredient_inventory(self):
+        """Test ingredient inventory endpoints"""
+        print("\n📦 Testing Ingredient Inventory...")
+        
+        # Get ingredient inventory
+        success, inventory = self.run_test("Get Ingredient Inventory", "GET", "ingredient-inventory", 200)
+        if success:
+            self.ingredient_inventory = inventory
+            self.log_test("Ingredient Inventory Data", len(inventory) > 0, f"Found {len(inventory)} inventory items")
+            
+            # Test ingredient alerts
+            success_alerts, alerts = self.run_test("Get Ingredient Alerts", "GET", "ingredient-inventory/alerts", 200)
+            if success_alerts:
+                self.log_test("Ingredient Alerts", True, f"Found {len(alerts)} alerts")
+            return True
+        return False
+
+    def test_catalog_export(self):
+        """Test catalog export functionality"""
+        print("\n📄 Testing Catalog Export...")
+        
+        if not hasattr(self, 'cafeterias') or not self.cafeterias:
+            self.log_test("Catalog Export", False, "No cafeterias available for export")
+            return False
+        
+        # Test JSON export
+        cafeteria_id = self.cafeterias[0]["id"]
+        success, catalog = self.run_test("Export Catalog JSON", "GET", f"catalog/export/{cafeteria_id}?format=json", 200)
+        
+        if success:
+            # Check catalog structure
+            required_fields = ['cafeteria', 'exported_at', 'products']
+            missing_fields = [field for field in required_fields if field not in catalog]
+            self.log_test("Catalog Structure", not missing_fields, f"Fields: {list(catalog.keys())}")
+            
+            if 'products' in catalog:
+                self.log_test("Catalog Products", len(catalog['products']) > 0, f"Found {len(catalog['products'])} products")
+            return True
+        return False
+
     def test_create_sale(self):
-        """Test creating a new sale"""
-        print("\n🛍️ Testing Sale Creation...")
+        """Test creating a new sale with ingredient deduction"""
+        print("\n🛍️ Testing Sale Creation with Ingredient Deduction...")
         
         if not hasattr(self, 'cafeterias') or not hasattr(self, 'products'):
             self.log_test("Sale Creation", False, "Missing cafeterias or products data")
@@ -244,6 +326,9 @@ class CafeControlAPITester:
             self.log_test("Sale Creation", False, "No cafeterias or products available")
             return False
         
+        # Get ingredient inventory before sale
+        success, inventory_before = self.run_test("Get Inventory Before Sale", "GET", "ingredient-inventory", 200)
+        
         # Create a test sale
         sale_data = {
             "cafeteria_id": self.cafeterias[0]["id"],
@@ -251,16 +336,54 @@ class CafeControlAPITester:
                 {
                     "product_id": self.products[0]["id"],
                     "product_name": self.products[0]["name"],
-                    "quantity": 2,
+                    "quantity": 1,
                     "unit_price": self.products[0]["price"],
-                    "subtotal": self.products[0]["price"] * 2
+                    "subtotal": self.products[0]["price"] * 1
                 }
             ],
             "payment_method": "efectivo"
         }
         
         success, response = self.run_test("Create Sale", "POST", "sales", 200, data=sale_data)
+        
+        if success:
+            # Check if ingredient inventory was updated (auto-deduction)
+            success_after, inventory_after = self.run_test("Get Inventory After Sale", "GET", "ingredient-inventory", 200)
+            
+            if success_after and inventory_before:
+                # Compare inventory levels (should be different if auto-deduction worked)
+                inventory_changed = len(inventory_before) != len(inventory_after) or any(
+                    before['quantity'] != after['quantity'] 
+                    for before, after in zip(inventory_before, inventory_after)
+                    if before['id'] == after['id']
+                )
+                self.log_test("Ingredient Auto-Deduction", inventory_changed, "Inventory levels changed after sale")
+        
         return success
+
+    def test_dashboard_with_ingredient_alerts(self):
+        """Test dashboard with ingredient alerts"""
+        print("\n📊 Testing Dashboard with Ingredient Alerts...")
+        
+        success, stats = self.run_test("Dashboard Stats with Ingredient Alerts", "GET", "dashboard/stats", 200)
+        if success:
+            # Check for low_ingredient_alerts field
+            has_ingredient_alerts = 'low_ingredient_alerts' in stats
+            self.log_test("Dashboard Ingredient Alerts", has_ingredient_alerts, 
+                         f"Ingredient alerts: {stats.get('low_ingredient_alerts', 'missing')}")
+            
+            required_fields = ['total_sales_today', 'total_sales_month', 'total_profit_today', 
+                             'total_profit_month', 'sales_count_today', 'low_stock_alerts', 
+                             'low_ingredient_alerts', 'top_products', 'sales_by_cafeteria', 'sales_trend']
+            
+            missing_fields = [field for field in required_fields if field not in stats]
+            
+            if not missing_fields:
+                self.log_test("Dashboard Stats Structure", True, "All required fields present")
+                return True
+            else:
+                self.log_test("Dashboard Stats Structure", False, f"Missing fields: {missing_fields}")
+        return False
 
     def run_all_tests(self):
         """Run all tests in sequence"""

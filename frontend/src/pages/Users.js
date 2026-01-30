@@ -198,12 +198,12 @@ const Users = () => {
               {(formData.role === "gerente" || formData.role === "cajero") && (
                 <div className="space-y-2">
                   <Label className="text-[#EDEDED]">Cafetería Asignada</Label>
-                  <Select value={formData.cafeteria_id} onValueChange={(v) => setFormData({...formData, cafeteria_id: v})}>
+                  <Select value={formData.cafeteria_id || "none"} onValueChange={(v) => setFormData({...formData, cafeteria_id: v === "none" ? "" : v})}>
                     <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
                       <SelectValue placeholder="Seleccionar cafetería" />
                     </SelectTrigger>
                     <SelectContent className="bg-[#161616] border-[#27272A]">
-                      <SelectItem value="" className="text-white hover:bg-[#27272A]">Sin asignar</SelectItem>
+                      <SelectItem value="none" className="text-white hover:bg-[#27272A]">Sin asignar</SelectItem>
                       {cafeterias.map((cafe) => (
                         <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">{cafe.name}</SelectItem>
                       ))}

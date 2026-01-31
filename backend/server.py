@@ -1374,9 +1374,10 @@ async def delete_recipe(recipe_id: str, current_user: dict = Depends(require_rol
 
 @api_router.get("/products", response_model=List[ProductResponse])
 async def get_products(current_user: dict = Depends(get_current_user)):
-    products = await db.products.find({}, {"_id": 0}).to_list(1000)
-    recipes = {r["product_id"]: r for r in await db.recipes.find({}, {"_id": 0}).to_list(1000)}
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    tenant_filter = get_tenant_filter(current_user)
+    products = await db.products.find(tenant_filter, {"_id": 0}).to_list(1000)
+    recipes = {r["product_id"]: r for r in await db.recipes.find(tenant_filter, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
     
     result = []
     for p in products:
@@ -1406,6 +1407,7 @@ async def create_product(product: ProductCreate, current_user: dict = Depends(re
     product_dict = product.model_dump()
     product_dict["id"] = product_id
     product_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    product_dict["tenant_id"] = current_user.get("tenant_id")
     
     await db.products.insert_one(product_dict)
     margin = ((product.price - product.cost) / product.price * 100) if product.price > 0 else 0
@@ -1413,7 +1415,9 @@ async def create_product(product: ProductCreate, current_user: dict = Depends(re
 
 @api_router.put("/products/{product_id}", response_model=ProductResponse)
 async def update_product(product_id: str, product: ProductBase, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
-    result = await db.products.update_one({"id": product_id}, {"$set": product.model_dump()})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = product_id
+    result = await db.products.update_one(tenant_filter, {"$set": product.model_dump()})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     updated = await db.products.find_one({"id": product_id}, {"_id": 0})
@@ -1424,7 +1428,7 @@ async def update_product(product_id: str, product: ProductBase, current_user: di
     
     if recipe:
         has_recipe = True
-        ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+        ingredients = {i["id"]: i for i in await db.ingredients.find(get_tenant_filter(current_user), {"_id": 0}).to_list(1000)}
         for ing_item in recipe.get("ingredients", []):
             ing = ingredients.get(ing_item["ingredient_id"], {})
             recipe_cost += ing.get("cost_per_unit", 0) * ing_item["quantity"]

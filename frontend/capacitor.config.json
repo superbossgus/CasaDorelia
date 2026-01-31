@@ -1,0 +1,8 @@
+{
+  "appId": "com.dore.cafeteria",
+  "appName": "Doré",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https"
+  }
+}

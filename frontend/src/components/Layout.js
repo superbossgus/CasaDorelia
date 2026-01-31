@@ -191,13 +191,23 @@ const Layout = ({ children }) => {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-[#27272A]">
-            <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-              alt="Doré" 
-              className="h-10 w-auto"
-            />
+            {tenantInfo?.logo_url ? (
+              <img 
+                src={`${process.env.REACT_APP_BACKEND_URL}${tenantInfo.logo_url}`}
+                alt={tenantInfo.business_name} 
+                className="h-10 w-10 object-contain"
+              />
+            ) : (
+              <img 
+                src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+                alt="Doré" 
+                className="h-10 w-auto"
+              />
+            )}
             <div>
-              <h1 className="font-manrope font-bold text-xl text-white">Doré</h1>
+              <h1 className="font-manrope font-bold text-xl text-white">
+                {tenantInfo?.business_name || "Doré"}
+              </h1>
               <p className="text-xs text-[#71717A]">Sistema de Gestión</p>
             </div>
           </div>

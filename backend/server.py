@@ -422,6 +422,366 @@ def require_roles(allowed_roles: List[str]):
         return current_user
     return role_checker
 
+# ============== TENANT ROUTES (PUBLIC) ==============
+
+@api_router.get("/plans", response_model=List[SubscriptionPlanResponse])
+async def get_plans():
+    """Get all subscription plans (public)"""
+    return [
+        SubscriptionPlanResponse(
+            plan_id=plan_id,
+            name=plan["name"],
+            max_branches=plan["max_branches"],
+            price=plan["price"],
+            currency=plan["currency"]
+        )
+        for plan_id, plan in SUBSCRIPTION_PLANS.items()
+    ]
+
+@api_router.post("/tenants/register")
+async def register_tenant(tenant: TenantCreate):
+    """Register a new business/tenant with 7-day trial"""
+    # Check if email already exists
+    existing = await db.users.find_one({"email": tenant.owner_email})
+    if existing:
+        raise HTTPException(status_code=400, detail="El email ya está registrado")
+    
+    existing_tenant = await db.tenants.find_one({"owner_email": tenant.owner_email})
+    if existing_tenant:
+        raise HTTPException(status_code=400, detail="Ya existe un negocio con este email")
+    
+    # Create tenant
+    tenant_id = str(uuid.uuid4())
+    trial_ends = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
+    
+    tenant_dict = {
+        "id": tenant_id,
+        "business_name": tenant.business_name,
+        "owner_email": tenant.owner_email,
+        "phone": tenant.phone,
+        "status": TenantStatus.TRIAL,
+        "plan_id": "plan_1",  # Start with basic plan during trial
+        "max_branches": 1,
+        "trial_ends_at": trial_ends.isoformat(),
+        "subscription_ends_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.tenants.insert_one(tenant_dict)
+    
+    # Create owner user as admin
+    user_id = str(uuid.uuid4())
+    user_dict = {
+        "id": user_id,
+        "email": tenant.owner_email,
+        "name": tenant.owner_name,
+        "password": hash_password(tenant.owner_password),
+        "role": UserRole.ADMIN,
+        "tenant_id": tenant_id,
+        "cafeteria_id": None,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.users.insert_one(user_dict)
+    
+    # Create token for auto-login
+    token = create_token(user_id, tenant.owner_email, UserRole.ADMIN, None, tenant_id)
+    
+    return {
+        "message": "Negocio registrado exitosamente",
+        "tenant_id": tenant_id,
+        "trial_ends_at": trial_ends.isoformat(),
+        "token": token,
+        "user": UserResponse(
+            id=user_id,
+            email=tenant.owner_email,
+            name=tenant.owner_name,
+            role=UserRole.ADMIN,
+            cafeteria_id=None,
+            is_active=True,
+            tenant_id=tenant_id
+        )
+    }
+
+@api_router.get("/tenants/me", response_model=TenantResponse)
+async def get_my_tenant(current_user: dict = Depends(get_current_user)):
+    """Get current user's tenant info"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="No perteneces a ningún negocio")
+    
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+    
+    return TenantResponse(**tenant)
+
+@api_router.get("/tenants/subscription-status")
+async def get_subscription_status(current_user: dict = Depends(get_current_user)):
+    """Get subscription status for current tenant"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=404, detail="No perteneces a ningún negocio")
+    
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+    
+    now = datetime.now(timezone.utc)
+    
+    # Check trial status
+    is_trial = tenant["status"] == TenantStatus.TRIAL
+    trial_ends = None
+    trial_days_left = 0
+    
+    if is_trial and tenant.get("trial_ends_at"):
+        trial_ends = datetime.fromisoformat(tenant["trial_ends_at"].replace("Z", "+00:00"))
+        trial_days_left = max(0, (trial_ends - now).days)
+    
+    # Check subscription status
+    subscription_active = False
+    subscription_ends = None
+    
+    if tenant.get("subscription_ends_at"):
+        subscription_ends = datetime.fromisoformat(tenant["subscription_ends_at"].replace("Z", "+00:00"))
+        subscription_active = subscription_ends > now
+    
+    # Count current branches
+    branch_count = await db.cafeterias.count_documents({"tenant_id": tenant_id})
+    
+    plan = SUBSCRIPTION_PLANS.get(tenant.get("plan_id", "plan_1"), SUBSCRIPTION_PLANS["plan_1"])
+    
+    return {
+        "status": tenant["status"],
+        "is_trial": is_trial,
+        "trial_ends_at": tenant.get("trial_ends_at"),
+        "trial_days_left": trial_days_left,
+        "subscription_active": subscription_active,
+        "subscription_ends_at": tenant.get("subscription_ends_at"),
+        "plan_id": tenant.get("plan_id"),
+        "plan_name": plan["name"],
+        "max_branches": tenant.get("max_branches", 1),
+        "current_branches": branch_count,
+        "can_add_branch": branch_count < tenant.get("max_branches", 1)
+    }
+
+# ============== STRIPE/PAYMENT ROUTES ==============
+
+@api_router.post("/subscription/checkout")
+async def create_subscription_checkout(
+    request: Request,
+    checkout_data: SubscriptionCheckoutRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create Stripe checkout session for subscription"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No perteneces a ningún negocio")
+    
+    # Validate plan
+    if checkout_data.plan_id not in SUBSCRIPTION_PLANS:
+        raise HTTPException(status_code=400, detail="Plan no válido")
+    
+    plan = SUBSCRIPTION_PLANS[checkout_data.plan_id]
+    
+    # Initialize Stripe
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    
+    # Create URLs
+    origin = checkout_data.origin_url.rstrip("/")
+    success_url = f"{origin}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/subscription"
+    
+    # Create checkout session
+    checkout_request = CheckoutSessionRequest(
+        amount=plan["price"],
+        currency=plan["currency"],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "tenant_id": tenant_id,
+            "plan_id": checkout_data.plan_id,
+            "user_email": current_user.get("email", "")
+        }
+    )
+    
+    session = await stripe_checkout.create_checkout_session(checkout_request)
+    
+    # Create payment transaction record
+    transaction = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "plan_id": checkout_data.plan_id,
+        "amount": plan["price"],
+        "currency": plan["currency"],
+        "session_id": session.session_id,
+        "status": "pending",
+        "payment_status": "initiated",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.payment_transactions.insert_one(transaction)
+    
+    return {
+        "checkout_url": session.url,
+        "session_id": session.session_id
+    }
+
+@api_router.get("/subscription/checkout/status/{session_id}")
+async def get_checkout_status(
+    request: Request,
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Check payment status and activate subscription if paid"""
+    tenant_id = current_user.get("tenant_id")
+    
+    # Find transaction
+    transaction = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transacción no encontrada")
+    
+    if transaction["tenant_id"] != tenant_id:
+        raise HTTPException(status_code=403, detail="No autorizado")
+    
+    # Already processed?
+    if transaction.get("payment_status") == "paid":
+        return {
+            "status": "complete",
+            "payment_status": "paid",
+            "message": "Suscripción ya activada"
+        }
+    
+    # Check with Stripe
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    
+    status = await stripe_checkout.get_checkout_status(session_id)
+    
+    # Update transaction
+    await db.payment_transactions.update_one(
+        {"session_id": session_id},
+        {"$set": {"status": status.status, "payment_status": status.payment_status}}
+    )
+    
+    # If paid, activate subscription
+    if status.payment_status == "paid":
+        plan_id = transaction["plan_id"]
+        plan = SUBSCRIPTION_PLANS.get(plan_id, SUBSCRIPTION_PLANS["plan_1"])
+        
+        # Set subscription for 30 days
+        subscription_ends = datetime.now(timezone.utc) + timedelta(days=30)
+        
+        await db.tenants.update_one(
+            {"id": tenant_id},
+            {"$set": {
+                "status": TenantStatus.ACTIVE,
+                "plan_id": plan_id,
+                "max_branches": plan["max_branches"],
+                "subscription_ends_at": subscription_ends.isoformat()
+            }}
+        )
+        
+        return {
+            "status": status.status,
+            "payment_status": status.payment_status,
+            "message": "¡Suscripción activada exitosamente!",
+            "subscription_ends_at": subscription_ends.isoformat()
+        }
+    
+    return {
+        "status": status.status,
+        "payment_status": status.payment_status,
+        "message": "Pago pendiente"
+    }
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhooks"""
+    try:
+        body = await request.body()
+        signature = request.headers.get("Stripe-Signature")
+        
+        host_url = str(request.base_url).rstrip("/")
+        webhook_url = f"{host_url}/api/webhook/stripe"
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+        
+        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        
+        if webhook_response.payment_status == "paid":
+            session_id = webhook_response.session_id
+            metadata = webhook_response.metadata
+            
+            # Update transaction
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {"status": "complete", "payment_status": "paid"}}
+            )
+            
+            # Activate subscription
+            tenant_id = metadata.get("tenant_id")
+            plan_id = metadata.get("plan_id", "plan_1")
+            
+            if tenant_id:
+                plan = SUBSCRIPTION_PLANS.get(plan_id, SUBSCRIPTION_PLANS["plan_1"])
+                subscription_ends = datetime.now(timezone.utc) + timedelta(days=30)
+                
+                await db.tenants.update_one(
+                    {"id": tenant_id},
+                    {"$set": {
+                        "status": TenantStatus.ACTIVE,
+                        "plan_id": plan_id,
+                        "max_branches": plan["max_branches"],
+                        "subscription_ends_at": subscription_ends.isoformat()
+                    }}
+                )
+        
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+# ============== SUPER ADMIN ROUTES ==============
+
+@api_router.get("/admin/tenants")
+async def get_all_tenants(current_user: dict = Depends(get_current_user)):
+    """Get all tenants (super admin only)"""
+    if current_user.get("role") != UserRole.SUPERADMIN:
+        raise HTTPException(status_code=403, detail="Solo super admin")
+    
+    tenants = await db.tenants.find({}, {"_id": 0}).to_list(10000)
+    
+    # Add branch count for each tenant
+    for tenant in tenants:
+        tenant["branch_count"] = await db.cafeterias.count_documents({"tenant_id": tenant["id"]})
+        tenant["user_count"] = await db.users.count_documents({"tenant_id": tenant["id"]})
+    
+    return tenants
+
+@api_router.get("/admin/stats")
+async def get_admin_stats(current_user: dict = Depends(get_current_user)):
+    """Get platform stats (super admin only)"""
+    if current_user.get("role") != UserRole.SUPERADMIN:
+        raise HTTPException(status_code=403, detail="Solo super admin")
+    
+    total_tenants = await db.tenants.count_documents({})
+    active_tenants = await db.tenants.count_documents({"status": TenantStatus.ACTIVE})
+    trial_tenants = await db.tenants.count_documents({"status": TenantStatus.TRIAL})
+    total_revenue = 0
+    
+    # Calculate revenue
+    paid_transactions = await db.payment_transactions.find({"payment_status": "paid"}, {"_id": 0}).to_list(10000)
+    total_revenue = sum(t.get("amount", 0) for t in paid_transactions)
+    
+    return {
+        "total_tenants": total_tenants,
+        "active_tenants": active_tenants,
+        "trial_tenants": trial_tenants,
+        "total_revenue": total_revenue,
+        "currency": "MXN"
+    }
+
 # ============== AUTH ROUTES ==============
 
 @api_router.post("/auth/register", response_model=TokenResponse)

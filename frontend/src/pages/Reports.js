@@ -132,19 +132,53 @@ const Reports = () => {
           <p className="text-[#A1A1AA] mt-1">Análisis de rendimiento del mes actual</p>
         </div>
         
-        {isAdmin() && (
-          <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
-            <SelectTrigger className="w-[200px] bg-[#161616] border-[#27272A] text-white">
-              <SelectValue placeholder="Filtrar análisis" />
-            </SelectTrigger>
-            <SelectContent className="bg-[#161616] border-[#27272A]">
-              <SelectItem value="all" className="text-white hover:bg-[#27272A]">Todas las cafeterías</SelectItem>
-              {cafeterias.map((cafe) => (
-                <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">{cafe.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <div className="flex items-center gap-3">
+          {isAdmin() && (
+            <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
+              <SelectTrigger className="w-[180px] bg-[#161616] border-[#27272A] text-white">
+                <SelectValue placeholder="Filtrar análisis" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#161616] border-[#27272A]">
+                <SelectItem value="all" className="text-white hover:bg-[#27272A]">Todas las cafeterías</SelectItem>
+                {cafeterias.map((cafe) => (
+                  <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">{cafe.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          
+          {/* Download Buttons */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => downloadReport('sales', 'pdf')}
+              disabled={downloading === 'sales_pdf'}
+              className="bg-transparent border-[#27272A] text-white hover:bg-[#27272A]"
+            >
+              {downloading === 'sales_pdf' ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <FileText className="h-4 w-4 mr-2 text-red-400" />
+              )}
+              PDF
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => downloadReport('sales', 'excel')}
+              disabled={downloading === 'sales_excel'}
+              className="bg-transparent border-[#27272A] text-white hover:bg-[#27272A]"
+            >
+              {downloading === 'sales_excel' ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <FileSpreadsheet className="h-4 w-4 mr-2 text-green-400" />
+              )}
+              Excel
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Profit Analysis Cards */}

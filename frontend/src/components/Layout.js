@@ -194,6 +194,23 @@ const Layout = ({ children }) => {
 
           {/* Navigation */}
           <ScrollArea className="flex-1 py-4">
+            {/* Subscription Banner */}
+            {subscriptionStatus && (subscriptionStatus.is_trial || subscriptionStatus.status === "suspended") && (
+              <div className="mx-3 mb-3 p-3 rounded-lg bg-gradient-to-r from-[#708238]/20 to-[#D97706]/20 border border-[#708238]/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <Crown className="h-4 w-4 text-[#708238]" />
+                  <span className="text-xs font-medium text-white">
+                    {subscriptionStatus.status === "suspended" ? "Período expirado" : `${subscriptionStatus.trial_days_left} días de prueba`}
+                  </span>
+                </div>
+                <Link to="/subscription">
+                  <Button size="sm" className="w-full bg-[#708238] hover:bg-[#5a692d] text-white text-xs h-7">
+                    {subscriptionStatus.status === "suspended" ? "Suscribirse" : "Ver planes"}
+                  </Button>
+                </Link>
+              </div>
+            )}
+            
             <nav className="px-3 space-y-1">
               {filteredNavItems.map((item) => (
                 <NavLink key={item.path} item={item} mobile={sidebarOpen} alertCount={alertCount} />

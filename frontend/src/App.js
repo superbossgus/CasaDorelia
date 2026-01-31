@@ -152,6 +152,12 @@ function App() {
               <Layout><WhatsAppAlerts /></Layout>
             </ProtectedRoute>
           } />
+          
+          <Route path="/business-settings" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><BusinessSettings /></Layout>
+            </ProtectedRoute>
+          } />
         </Routes>
         <Toaster 
           position="top-right" 

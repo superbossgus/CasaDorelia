@@ -134,16 +134,39 @@ El seed data genera:
 │   ├── uploads/products/  # Imágenes subidas
 │   └── tests/
 └── frontend/
+    ├── android/           # Proyecto Android (Capacitor)
+    ├── ios/               # Proyecto iOS (Capacitor)
     ├── public/
     ├── src/
     │   ├── components/
     │   │   └── ui/        # Componentes Shadcn
     │   ├── context/
     │   │   └── AuthContext.js
+    │   ├── hooks/
+    │   │   └── useAlerts.js
+    │   ├── utils/
+    │   │   └── capacitor.js
     │   ├── pages/
     │   │   ├── WhatsAppAlerts.js
     │   │   ├── Products.js
     │   │   └── ...
     │   └── App.js
+    ├── capacitor.config.json
+    ├── MOBILE_APP_GUIDE.md
     └── package.json
 ```
+
+## 📱 Apps Móviles (Capacitor)
+
+La aplicación está configurada para generar apps nativas:
+- **Android**: `/app/frontend/android/`
+- **iOS**: `/app/frontend/ios/`
+
+### Comandos útiles:
+```bash
+yarn cap:build      # Construir y sincronizar
+yarn cap:android    # Abrir en Android Studio
+yarn cap:ios        # Abrir en Xcode (requiere Mac)
+```
+
+Ver guía completa en: `/app/frontend/MOBILE_APP_GUIDE.md`

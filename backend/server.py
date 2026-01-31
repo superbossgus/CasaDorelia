@@ -1005,6 +1005,7 @@ async def create_ingredient(ingredient: IngredientCreate, current_user: dict = D
     ingredient_dict = ingredient.model_dump()
     ingredient_dict["id"] = ingredient_id
     ingredient_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    ingredient_dict["tenant_id"] = current_user.get("tenant_id")
     
     await db.ingredients.insert_one(ingredient_dict)
     
@@ -1017,7 +1018,9 @@ async def create_ingredient(ingredient: IngredientCreate, current_user: dict = D
 
 @api_router.put("/ingredients/{ingredient_id}", response_model=IngredientResponse)
 async def update_ingredient(ingredient_id: str, ingredient: IngredientBase, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
-    result = await db.ingredients.update_one({"id": ingredient_id}, {"$set": ingredient.model_dump()})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = ingredient_id
+    result = await db.ingredients.update_one(tenant_filter, {"$set": ingredient.model_dump()})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Ingrediente no encontrado")
     
@@ -1031,7 +1034,9 @@ async def update_ingredient(ingredient_id: str, ingredient: IngredientBase, curr
 
 @api_router.delete("/ingredients/{ingredient_id}")
 async def delete_ingredient(ingredient_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.ingredients.delete_one({"id": ingredient_id})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = ingredient_id
+    result = await db.ingredients.delete_one(tenant_filter)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Ingrediente no encontrado")
     return {"message": "Ingrediente eliminado"}
@@ -1040,7 +1045,8 @@ async def delete_ingredient(ingredient_id: str, current_user: dict = Depends(req
 
 @api_router.get("/ingredient-inventory", response_model=List[IngredientInventoryResponse])
 async def get_ingredient_inventory(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    tenant_filter = get_tenant_filter(current_user)
+    query = {**tenant_filter}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] == UserRole.GERENTE and current_user.get("cafeteria_id"):
@@ -1048,15 +1054,13 @@ async def get_ingredient_inventory(cafeteria_id: Optional[str] = None, current_u
     
     inventory = await db.ingredient_inventory.find(query, {"_id": 0}).to_list(1000)
     
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     # Calculate average daily consumption from last 30 days
     thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    movements = await db.ingredient_movements.find({
-        "movement_type": "consumo_venta",
-        "created_at": {"$gte": thirty_days_ago}
-    }, {"_id": 0}).to_list(10000)
+    mov_query = {**tenant_filter, "movement_type": "consumo_venta", "created_at": {"$gte": thirty_days_ago}}
+    movements = await db.ingredient_movements.find(mov_query, {"_id": 0}).to_list(10000)
     
     daily_consumption = {}
     for mov in movements:

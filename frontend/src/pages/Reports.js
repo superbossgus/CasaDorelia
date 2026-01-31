@@ -74,6 +74,47 @@ const Reports = () => {
     return new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(value);
   };
 
+  const downloadReport = async (type, format) => {
+    setDownloading(`${type}_${format}`);
+    try {
+      const params = new URLSearchParams();
+      if (selectedCafeteria !== "all") {
+        params.append("cafeteria_id", selectedCafeteria);
+      }
+      
+      const response = await axios.get(`${API}/reports/${type}/${format}?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Get filename from header or generate one
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `reporte_${type}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename=(.+)/);
+        if (match) filename = match[1];
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success(`Reporte ${format.toUpperCase()} descargado`);
+    } catch (error) {
+      toast.error("Error al descargar reporte");
+      console.error(error);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">

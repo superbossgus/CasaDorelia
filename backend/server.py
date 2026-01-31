@@ -396,12 +396,13 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
-def create_token(user_id: str, email: str, role: str, cafeteria_id: Optional[str] = None) -> str:
+def create_token(user_id: str, email: str, role: str, cafeteria_id: Optional[str] = None, tenant_id: Optional[str] = None) -> str:
     payload = {
         "user_id": user_id,
         "email": email,
         "role": role,
         "cafeteria_id": cafeteria_id,
+        "tenant_id": tenant_id,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)

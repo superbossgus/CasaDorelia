@@ -114,9 +114,10 @@ El seed data genera:
 ## Backlog - Próximas Funcionalidades
 
 ### P0 - Crítico (Multi-Tenant)
-- [ ] Filtrar datos por tenant_id en todas las queries
+- [x] Filtrar datos por tenant_id en queries principales (cafeterías, productos, ventas, ingredientes, usuarios)
 - [ ] Panel de Super Admin para gestionar todos los tenants
 - [ ] Renovación automática de suscripciones (webhook recurrente)
+- [ ] Migrar usuarios legacy (admin@cafecontrol.com) a un tenant
 
 ### P1 - Alta Prioridad
 - [ ] Alertas automáticas programadas (cron job para envío diario)

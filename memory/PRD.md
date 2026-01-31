@@ -113,6 +113,11 @@ El seed data genera:
 
 ## Backlog - Próximas Funcionalidades
 
+### P0 - Crítico (Multi-Tenant)
+- [ ] Filtrar datos por tenant_id en todas las queries
+- [ ] Panel de Super Admin para gestionar todos los tenants
+- [ ] Renovación automática de suscripciones (webhook recurrente)
+
 ### P1 - Alta Prioridad
 - [ ] Alertas automáticas programadas (cron job para envío diario)
 - [ ] Sistema de alertas cuando el margen de ganancia baja por aumento de costos
@@ -123,7 +128,7 @@ El seed data genera:
 - [ ] Integración real con Clip POS API
 
 ### P3 - Baja Prioridad
-- [ ] App móvil para cajeros
+- [ ] App móvil compilada y publicada en stores
 - [ ] Integración con contabilidad
 - [ ] Pronósticos de ventas con IA
 

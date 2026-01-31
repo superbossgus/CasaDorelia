@@ -77,6 +77,15 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
   - Indicadores de alerta crítica (<3 días) y advertencia (<7 días)
   - Polling automático cada minuto para actualización
 
+### Sistema Multi-Tenant y Suscripciones (31-Ene-2026)
+- ✅ **Landing Page Pública**: Página de inicio con planes y registro
+- ✅ **Registro de Negocios**: Onboarding con 7 días de prueba gratis
+- ✅ **Sistema de Tenants**: Aislamiento de datos por negocio
+- ✅ **Suscripciones con Stripe**: Checkout y activación automática
+- ✅ **Página de Suscripción**: Gestión de planes y pagos
+- ✅ **Banner de Trial**: Aviso en sidebar con días restantes
+- ✅ **Apps Móviles**: Capacitor configurado para iOS y Android
+
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real
 - Requiere credenciales de developer.clip.mx para activación

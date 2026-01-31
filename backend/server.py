@@ -423,6 +423,24 @@ def require_roles(allowed_roles: List[str]):
         return current_user
     return role_checker
 
+def get_tenant_filter(current_user: dict) -> dict:
+    """Get MongoDB filter for tenant isolation"""
+    tenant_id = current_user.get("tenant_id")
+    if tenant_id:
+        return {"tenant_id": tenant_id}
+    # For legacy users without tenant, return empty filter (backwards compatibility)
+    return {}
+
+async def check_tenant_limit(tenant_id: str, resource_type: str) -> bool:
+    """Check if tenant has reached their limit for a resource"""
+    if resource_type == "cafeterias":
+        tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if tenant:
+            current_count = await db.cafeterias.count_documents({"tenant_id": tenant_id})
+            max_branches = tenant.get("max_branches", 1)
+            return current_count < max_branches
+    return True
+
 # ============== TENANT ROUTES (PUBLIC) ==============
 
 @api_router.get("/plans", response_model=List[SubscriptionPlanResponse])

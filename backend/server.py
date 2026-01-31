@@ -814,7 +814,25 @@ async def login(credentials: UserLogin):
     if not user.get("is_active", True):
         raise HTTPException(status_code=401, detail="Usuario desactivado")
     
-    token = create_token(user["id"], user["email"], user["role"], user.get("cafeteria_id"))
+    # Check tenant status if user belongs to a tenant
+    tenant_id = user.get("tenant_id")
+    if tenant_id:
+        tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+        if tenant:
+            now = datetime.now(timezone.utc)
+            # Check if trial expired
+            if tenant["status"] == TenantStatus.TRIAL:
+                trial_ends = datetime.fromisoformat(tenant["trial_ends_at"].replace("Z", "+00:00"))
+                if trial_ends < now:
+                    # Update tenant status
+                    await db.tenants.update_one({"id": tenant_id}, {"$set": {"status": TenantStatus.SUSPENDED}})
+            # Check if subscription expired
+            elif tenant["status"] == TenantStatus.ACTIVE and tenant.get("subscription_ends_at"):
+                sub_ends = datetime.fromisoformat(tenant["subscription_ends_at"].replace("Z", "+00:00"))
+                if sub_ends < now:
+                    await db.tenants.update_one({"id": tenant_id}, {"$set": {"status": TenantStatus.SUSPENDED}})
+    
+    token = create_token(user["id"], user["email"], user["role"], user.get("cafeteria_id"), tenant_id)
     return TokenResponse(
         token=token,
         user=UserResponse(
@@ -823,7 +841,8 @@ async def login(credentials: UserLogin):
             name=user["name"],
             role=user["role"],
             cafeteria_id=user.get("cafeteria_id"),
-            is_active=user.get("is_active", True)
+            is_active=user.get("is_active", True),
+            tenant_id=tenant_id
         )
     )
 

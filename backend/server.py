@@ -934,13 +934,16 @@ async def create_cafeteria(cafeteria: CafeteriaCreate, current_user: dict = Depe
     cafeteria_dict = cafeteria.model_dump()
     cafeteria_dict["id"] = cafeteria_id
     cafeteria_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    cafeteria_dict["tenant_id"] = tenant_id
     
     await db.cafeterias.insert_one(cafeteria_dict)
     return CafeteriaResponse(**cafeteria_dict)
 
 @api_router.put("/cafeterias/{cafeteria_id}", response_model=CafeteriaResponse)
 async def update_cafeteria(cafeteria_id: str, cafeteria: CafeteriaBase, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.cafeterias.update_one({"id": cafeteria_id}, {"$set": cafeteria.model_dump()})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = cafeteria_id
+    result = await db.cafeterias.update_one(tenant_filter, {"$set": cafeteria.model_dump()})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Cafetería no encontrada")
     updated = await db.cafeterias.find_one({"id": cafeteria_id}, {"_id": 0})
@@ -948,7 +951,9 @@ async def update_cafeteria(cafeteria_id: str, cafeteria: CafeteriaBase, current_
 
 @api_router.delete("/cafeterias/{cafeteria_id}")
 async def delete_cafeteria(cafeteria_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.cafeterias.delete_one({"id": cafeteria_id})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = cafeteria_id
+    result = await db.cafeterias.delete_one(tenant_filter)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cafetería no encontrada")
     return {"message": "Cafetería eliminada"}
@@ -957,7 +962,8 @@ async def delete_cafeteria(cafeteria_id: str, current_user: dict = Depends(requi
 
 @api_router.get("/categories", response_model=List[CategoryResponse])
 async def get_categories(current_user: dict = Depends(get_current_user)):
-    categories = await db.categories.find({}, {"_id": 0}).to_list(100)
+    tenant_filter = get_tenant_filter(current_user)
+    categories = await db.categories.find(tenant_filter, {"_id": 0}).to_list(100)
     return [CategoryResponse(**c) for c in categories]
 
 @api_router.post("/categories", response_model=CategoryResponse)
@@ -965,13 +971,16 @@ async def create_category(category: CategoryCreate, current_user: dict = Depends
     category_id = str(uuid.uuid4())
     category_dict = category.model_dump()
     category_dict["id"] = category_id
+    category_dict["tenant_id"] = current_user.get("tenant_id")
     
     await db.categories.insert_one(category_dict)
     return CategoryResponse(**category_dict)
 
 @api_router.delete("/categories/{category_id}")
 async def delete_category(category_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.categories.delete_one({"id": category_id})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = category_id
+    result = await db.categories.delete_one(tenant_filter)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
     return {"message": "Categoría eliminada"}
@@ -980,8 +989,9 @@ async def delete_category(category_id: str, current_user: dict = Depends(require
 
 @api_router.get("/ingredients", response_model=List[IngredientResponse])
 async def get_ingredients(current_user: dict = Depends(get_current_user)):
-    ingredients = await db.ingredients.find({}, {"_id": 0}).to_list(1000)
-    suppliers = {s["id"]: s["name"] for s in await db.suppliers.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    tenant_filter = get_tenant_filter(current_user)
+    ingredients = await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)
+    suppliers = {s["id"]: s["name"] for s in await db.suppliers.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     result = []
     for ing in ingredients:

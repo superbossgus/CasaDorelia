@@ -2012,7 +2012,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     total_profit_month = sum(s["profit"] for s in month_sales)
     
     # Product inventory alerts
-    inv_query = {}
+    inv_query = {**tenant_filter}
     if cafeteria_id:
         inv_query["cafeteria_id"] = cafeteria_id
     
@@ -2036,7 +2036,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     top_products = sorted(product_sales.values(), key=lambda x: x["revenue"], reverse=True)[:5]
     
     # Sales by cafeteria
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     cafe_sales = {}
     for sale in month_sales:
         cid = sale["cafeteria_id"]
@@ -2076,6 +2076,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
 
 @api_router.get("/reports/sales-comparison")
 async def get_sales_comparison(current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    tenant_filter = get_tenant_filter(current_user)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = today.replace(day=1)
     month_str = month_start.isoformat()

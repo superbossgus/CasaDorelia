@@ -85,6 +85,12 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Página de Suscripción**: Gestión de planes y pagos
 - ✅ **Banner de Trial**: Aviso en sidebar con días restantes
 - ✅ **Apps Móviles**: Capacitor configurado para iOS y Android
+- ✅ **Panel Super Admin**: Dashboard para gestionar todos los negocios
+- ✅ **Logo Personalizado**: Cada negocio puede subir su marca
+- ✅ **Reportes PDF/Excel**: Con logo del negocio incluido
+  - Reporte de ventas en PDF
+  - Reporte de ventas en Excel
+  - Catálogo de productos en PDF
 
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real

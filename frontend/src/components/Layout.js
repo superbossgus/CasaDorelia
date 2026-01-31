@@ -33,6 +33,7 @@ import {
   MessageCircle,
   AlertTriangle,
   Crown,
+  Settings,
 } from "lucide-react";
 import axios from "axios";
 
@@ -42,6 +43,7 @@ const Layout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
   const [subscriptionStatus, setSubscriptionStatus] = useState(null);
+  const [tenantInfo, setTenantInfo] = useState(null);
   const { user, logout, isAdmin, canManage, token } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();

@@ -101,6 +101,7 @@ class TenantResponse(BaseModel):
     trial_ends_at: Optional[str] = None
     subscription_ends_at: Optional[str] = None
     max_branches: int = 1
+    logo_url: Optional[str] = None
     created_at: str
 
 class SubscriptionPlanResponse(BaseModel):

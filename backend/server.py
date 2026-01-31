@@ -481,6 +481,7 @@ async def register_tenant(tenant: TenantCreate):
         "status": TenantStatus.TRIAL,
         "plan_id": "plan_1",  # Start with basic plan during trial
         "max_branches": 1,
+        "logo_url": None,  # Tenant can upload their own logo
         "trial_ends_at": trial_ends.isoformat(),
         "subscription_ends_at": None,
         "created_at": datetime.now(timezone.utc).isoformat()

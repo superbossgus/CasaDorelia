@@ -116,7 +116,7 @@ El seed data genera:
 ### P0 - Crítico (Multi-Tenant)
 - [x] Filtrar datos por tenant_id en queries principales
 - [x] Migrar usuario legacy (admin@cafecontrol.com) al tenant "Doré"
-- [ ] Panel de Super Admin para gestionar todos los tenants
+- [x] Panel de Super Admin para gestionar todos los tenants
 - [ ] Renovación automática de suscripciones (webhook recurrente)
 
 ### P1 - Alta Prioridad

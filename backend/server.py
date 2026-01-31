@@ -535,6 +535,117 @@ async def get_my_tenant(current_user: dict = Depends(get_current_user)):
     
     return TenantResponse(**tenant)
 
+@api_router.post("/tenants/logo")
+async def upload_tenant_logo(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Upload tenant logo"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No perteneces a ningún negocio")
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Tipo de archivo no permitido. Use JPEG, PNG, WebP o SVG")
+    
+    # Validate file size (max 2MB)
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="El archivo es demasiado grande. Máximo 2MB")
+    
+    # Create logos directory
+    logos_dir = UPLOADS_DIR / "logos"
+    logos_dir.mkdir(exist_ok=True)
+    
+    # Generate filename
+    ext = file.filename.split(".")[-1] if "." in file.filename else "png"
+    filename = f"logo_{tenant_id}.{ext}"
+    file_path = logos_dir / filename
+    
+    # Delete old logo if exists
+    for old_file in logos_dir.glob(f"logo_{tenant_id}.*"):
+        old_file.unlink()
+    
+    # Save file
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    # Update tenant with logo URL
+    logo_url = f"/api/uploads/logos/{filename}"
+    await db.tenants.update_one(
+        {"id": tenant_id},
+        {"$set": {"logo_url": logo_url}}
+    )
+    
+    return {"message": "Logo subido correctamente", "logo_url": logo_url}
+
+@api_router.delete("/tenants/logo")
+async def delete_tenant_logo(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Delete tenant logo"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No perteneces a ningún negocio")
+    
+    # Delete logo files
+    logos_dir = UPLOADS_DIR / "logos"
+    for old_file in logos_dir.glob(f"logo_{tenant_id}.*"):
+        old_file.unlink()
+    
+    # Remove from tenant
+    await db.tenants.update_one(
+        {"id": tenant_id},
+        {"$set": {"logo_url": None}}
+    )
+    
+    return {"message": "Logo eliminado"}
+
+@api_router.get("/uploads/logos/{filename}")
+async def get_logo(filename: str):
+    """Serve logo files"""
+    file_path = UPLOADS_DIR / "logos" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Logo no encontrado")
+    
+    ext = filename.split(".")[-1].lower()
+    content_types = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "svg": "image/svg+xml",
+        "webp": "image/webp"
+    }
+    content_type = content_types.get(ext, "application/octet-stream")
+    
+    with open(file_path, "rb") as f:
+        content = f.read()
+    
+    return Response(content=content, media_type=content_type)
+
+@api_router.put("/tenants/settings")
+async def update_tenant_settings(
+    business_name: str = Form(None),
+    phone: str = Form(None),
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Update tenant settings"""
+    tenant_id = current_user.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No perteneces a ningún negocio")
+    
+    update_data = {}
+    if business_name:
+        update_data["business_name"] = business_name
+    if phone is not None:
+        update_data["phone"] = phone
+    
+    if update_data:
+        await db.tenants.update_one({"id": tenant_id}, {"$set": update_data})
+    
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    return TenantResponse(**tenant)
+
 @api_router.get("/tenants/subscription-status")
 async def get_subscription_status(current_user: dict = Depends(get_current_user)):
     """Get subscription status for current tenant"""

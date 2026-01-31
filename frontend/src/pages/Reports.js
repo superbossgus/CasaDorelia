@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
 import axios from "axios";
-import { FileText, TrendingUp, DollarSign, ShoppingCart, Store } from "lucide-react";
+import { FileText, TrendingUp, DollarSign, ShoppingCart, Store, Download, FileSpreadsheet, Loader2 } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -21,12 +22,13 @@ import {
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const Reports = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, token } = useAuth();
   const [comparison, setComparison] = useState([]);
   const [profitAnalysis, setProfitAnalysis] = useState(null);
   const [cafeterias, setCafeterias] = useState([]);
   const [selectedCafeteria, setSelectedCafeteria] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(null);
 
   useEffect(() => {
     fetchCafeterias();

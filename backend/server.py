@@ -1964,6 +1964,7 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
     sale_dict = {
         "id": sale_id,
         "cafeteria_id": sale.cafeteria_id,
+        "tenant_id": current_user.get("tenant_id"),
         "items": enriched_items,
         "subtotal": round(subtotal, 2),
         "tax": round(tax, 2),
@@ -1987,10 +1988,11 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
 
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    tenant_filter = get_tenant_filter(current_user)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = today.replace(day=1)
     
-    query = {}
+    query = {**tenant_filter}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):

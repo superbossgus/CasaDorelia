@@ -36,6 +36,11 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     return <Navigate to="/login" replace />;
   }
   
+  // Super admin should go to their panel
+  if (user.role === "superadmin" && !allowedRoles?.includes("superadmin")) {
+    return <Navigate to="/superadmin" replace />;
+  }
+  
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
   }

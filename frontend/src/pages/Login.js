@@ -49,9 +49,15 @@ const Login = () => {
     setIsLoading(true);
     
     try {
-      await login(email, password);
+      const userData = await login(email, password);
       toast.success("¡Bienvenido!");
-      navigate("/dashboard");
+      
+      // Redirect based on role
+      if (userData?.role === "superadmin") {
+        navigate("/superadmin");
+      } else {
+        navigate("/dashboard");
+      }
     } catch (error) {
       const message = error.response?.data?.detail || "Error al iniciar sesión";
       toast.error(message);

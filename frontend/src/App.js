@@ -18,6 +18,7 @@ import Cafeterias from "./pages/Cafeterias";
 import WhatsAppAlerts from "./pages/WhatsAppAlerts";
 import Subscription from "./pages/Subscription";
 import SubscriptionSuccess from "./pages/SubscriptionSuccess";
+import SuperAdmin from "./pages/SuperAdmin";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {

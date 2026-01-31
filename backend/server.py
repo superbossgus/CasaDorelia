@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Form, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -8,7 +8,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -19,6 +19,7 @@ import io
 import base64
 import shutil
 from twilio.rest import Client as TwilioClient
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
@@ -44,6 +45,20 @@ TWILIO_WHATSAPP_NUMBER = os.environ.get('TWILIO_WHATSAPP_NUMBER')
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
     twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+# Stripe Config
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+
+# Subscription Plans (MXN)
+SUBSCRIPTION_PLANS = {
+    "plan_1": {"name": "1 Sucursal", "max_branches": 1, "price": 399.00, "currency": "mxn"},
+    "plan_2": {"name": "2 Sucursales", "max_branches": 2, "price": 599.00, "currency": "mxn"},
+    "plan_3": {"name": "3-5 Sucursales", "max_branches": 5, "price": 799.00, "currency": "mxn"},
+    "plan_4": {"name": "5-10 Sucursales", "max_branches": 10, "price": 999.00, "currency": "mxn"},
+    "plan_5": {"name": "10-20 Sucursales", "max_branches": 20, "price": 1199.00, "currency": "mxn"},
+}
+
+TRIAL_DAYS = 7
 
 app = FastAPI(title="Doré API")
 api_router = APIRouter(prefix="/api")

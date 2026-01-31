@@ -1729,6 +1729,361 @@ async def export_catalog(cafeteria_id: str, format: str = "json", current_user: 
     
     return catalog
 
+# ============== PDF/EXCEL REPORTS WITH LOGO ==============
+
+async def get_tenant_logo_path(tenant_id: str) -> Optional[Path]:
+    """Get the path to tenant's logo file"""
+    if not tenant_id:
+        return None
+    logos_dir = UPLOADS_DIR / "logos"
+    for logo_file in logos_dir.glob(f"logo_{tenant_id}.*"):
+        return logo_file
+    return None
+
+@api_router.get("/reports/sales/pdf")
+async def export_sales_pdf(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    cafeteria_id: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Export sales report as PDF with tenant logo"""
+    tenant_id = current_user.get("tenant_id")
+    tenant_filter = get_tenant_filter(current_user)
+    
+    # Get tenant info
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
+    business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
+    
+    # Build query
+    query = {**tenant_filter}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    if start_date:
+        query["created_at"] = {"$gte": start_date}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = end_date
+        else:
+            query["created_at"] = {"$lte": end_date}
+    
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
+    
+    # Create PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, alignment=TA_CENTER, textColor=colors.HexColor('#708238'))
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.gray)
+    
+    # Logo
+    logo_path = await get_tenant_logo_path(tenant_id)
+    if logo_path and logo_path.exists():
+        try:
+            logo = RLImage(str(logo_path), width=1.5*inch, height=1.5*inch)
+            logo.hAlign = 'CENTER'
+            elements.append(logo)
+            elements.append(Spacer(1, 0.2*inch))
+        except:
+            pass
+    
+    # Header
+    elements.append(Paragraph(business_name, title_style))
+    elements.append(Paragraph("Reporte de Ventas", styles['Heading2']))
+    
+    date_range = ""
+    if start_date and end_date:
+        date_range = f"Del {start_date[:10]} al {end_date[:10]}"
+    elif start_date:
+        date_range = f"Desde {start_date[:10]}"
+    elif end_date:
+        date_range = f"Hasta {end_date[:10]}"
+    else:
+        date_range = f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    
+    elements.append(Paragraph(date_range, subtitle_style))
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Summary
+    total_sales = sum(s["total"] for s in sales)
+    total_profit = sum(s["profit"] for s in sales)
+    
+    summary_data = [
+        ["Total Ventas", f"${total_sales:,.2f}"],
+        ["Total Utilidad", f"${total_profit:,.2f}"],
+        ["Número de Transacciones", str(len(sales))]
+    ]
+    summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f5f5f5')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#333333')),
+        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#708238')),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Sales table
+    elements.append(Paragraph("Detalle de Ventas", styles['Heading3']))
+    elements.append(Spacer(1, 0.1*inch))
+    
+    table_data = [["Fecha", "Cafetería", "Productos", "Total", "Utilidad", "Método"]]
+    for s in sales[:50]:  # Limit to 50 for PDF
+        items_str = ", ".join([f"{i['product_name']} x{i['quantity']}" for i in s.get("items", [])[:2]])
+        if len(s.get("items", [])) > 2:
+            items_str += f" (+{len(s['items'])-2})"
+        table_data.append([
+            s["created_at"][:10] if s.get("created_at") else "",
+            cafeterias.get(s.get("cafeteria_id"), "")[:15],
+            items_str[:30],
+            f"${s['total']:,.2f}",
+            f"${s['profit']:,.2f}",
+            s.get("payment_method", "")[:10]
+        ])
+    
+    sales_table = Table(table_data, colWidths=[0.9*inch, 1.1*inch, 2.2*inch, 0.9*inch, 0.9*inch, 0.8*inch])
+    sales_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#708238')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('ALIGN', (3, 0), (4, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e0e0e0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+    ]))
+    elements.append(sales_table)
+    
+    # Build PDF
+    doc.build(elements)
+    buffer.seek(0)
+    
+    filename = f"ventas_{business_name}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@api_router.get("/reports/sales/excel")
+async def export_sales_excel(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    cafeteria_id: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Export sales report as Excel with tenant logo"""
+    tenant_id = current_user.get("tenant_id")
+    tenant_filter = get_tenant_filter(current_user)
+    
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
+    business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
+    
+    query = {**tenant_filter}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    if start_date:
+        query["created_at"] = {"$gte": start_date}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = end_date
+        else:
+            query["created_at"] = {"$lte": end_date}
+    
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
+    
+    # Create Excel
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ventas"
+    
+    # Styles
+    header_fill = PatternFill(start_color="708238", end_color="708238", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True, size=16, color="708238")
+    money_font = Font(color="708238")
+    thin_border = Border(
+        left=Side(style='thin', color='E0E0E0'),
+        right=Side(style='thin', color='E0E0E0'),
+        top=Side(style='thin', color='E0E0E0'),
+        bottom=Side(style='thin', color='E0E0E0')
+    )
+    
+    # Logo
+    logo_path = await get_tenant_logo_path(tenant_id)
+    start_row = 1
+    if logo_path and logo_path.exists():
+        try:
+            img = XLImage(str(logo_path))
+            img.width = 80
+            img.height = 80
+            ws.add_image(img, 'A1')
+            start_row = 6
+        except:
+            pass
+    
+    # Title
+    ws.merge_cells(f'A{start_row}:G{start_row}')
+    ws[f'A{start_row}'] = business_name
+    ws[f'A{start_row}'].font = title_font
+    ws[f'A{start_row}'].alignment = Alignment(horizontal='center')
+    
+    ws.merge_cells(f'A{start_row+1}:G{start_row+1}')
+    ws[f'A{start_row+1}'] = "Reporte de Ventas"
+    ws[f'A{start_row+1}'].font = Font(bold=True, size=12)
+    ws[f'A{start_row+1}'].alignment = Alignment(horizontal='center')
+    
+    # Summary
+    total_sales = sum(s["total"] for s in sales)
+    total_profit = sum(s["profit"] for s in sales)
+    
+    summary_row = start_row + 3
+    ws[f'A{summary_row}'] = "Total Ventas:"
+    ws[f'B{summary_row}'] = f"${total_sales:,.2f}"
+    ws[f'B{summary_row}'].font = money_font
+    ws[f'C{summary_row}'] = "Total Utilidad:"
+    ws[f'D{summary_row}'] = f"${total_profit:,.2f}"
+    ws[f'D{summary_row}'].font = money_font
+    ws[f'E{summary_row}'] = "Transacciones:"
+    ws[f'F{summary_row}'] = len(sales)
+    
+    # Headers
+    header_row = summary_row + 2
+    headers = ["Fecha", "Cafetería", "Productos", "Subtotal", "Impuesto", "Total", "Utilidad", "Método Pago"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center')
+        cell.border = thin_border
+    
+    # Data
+    for row_idx, sale in enumerate(sales, header_row + 1):
+        items_str = ", ".join([f"{i['product_name']} x{i['quantity']}" for i in sale.get("items", [])])
+        
+        ws.cell(row=row_idx, column=1, value=sale.get("created_at", "")[:10]).border = thin_border
+        ws.cell(row=row_idx, column=2, value=cafeterias.get(sale.get("cafeteria_id"), "")).border = thin_border
+        ws.cell(row=row_idx, column=3, value=items_str).border = thin_border
+        ws.cell(row=row_idx, column=4, value=sale.get("subtotal", 0)).border = thin_border
+        ws.cell(row=row_idx, column=5, value=sale.get("tax", 0)).border = thin_border
+        ws.cell(row=row_idx, column=6, value=sale.get("total", 0)).border = thin_border
+        ws.cell(row=row_idx, column=7, value=sale.get("profit", 0)).border = thin_border
+        ws.cell(row=row_idx, column=8, value=sale.get("payment_method", "")).border = thin_border
+        
+        # Format money columns
+        for col in [4, 5, 6, 7]:
+            ws.cell(row=row_idx, column=col).number_format = '$#,##0.00'
+    
+    # Auto-width columns
+    for col in range(1, 9):
+        ws.column_dimensions[get_column_letter(col)].width = 15
+    ws.column_dimensions['C'].width = 40
+    
+    # Save to buffer
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    
+    filename = f"ventas_{business_name}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@api_router.get("/reports/products/pdf")
+async def export_products_pdf(
+    cafeteria_id: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Export products catalog as PDF with tenant logo"""
+    tenant_id = current_user.get("tenant_id")
+    tenant_filter = get_tenant_filter(current_user)
+    
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
+    business_name = tenant.get("business_name", "Catálogo") if tenant else "Catálogo"
+    
+    products = await db.products.find({**tenant_filter, "is_active": True}, {"_id": 0}).to_list(1000)
+    categories = {c["id"]: c["name"] for c in await db.categories.find(tenant_filter, {"_id": 0}).to_list(100)}
+    
+    inventory = {}
+    if cafeteria_id:
+        inv_items = await db.inventory.find({"cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)
+        inventory = {i["product_id"]: i["quantity"] for i in inv_items}
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, alignment=TA_CENTER, textColor=colors.HexColor('#708238'))
+    
+    logo_path = await get_tenant_logo_path(tenant_id)
+    if logo_path and logo_path.exists():
+        try:
+            logo = RLImage(str(logo_path), width=1.5*inch, height=1.5*inch)
+            logo.hAlign = 'CENTER'
+            elements.append(logo)
+            elements.append(Spacer(1, 0.2*inch))
+        except:
+            pass
+    
+    elements.append(Paragraph(business_name, title_style))
+    elements.append(Paragraph("Catálogo de Productos", styles['Heading2']))
+    elements.append(Paragraph(f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 
+                              ParagraphStyle('Date', alignment=TA_CENTER, textColor=colors.gray, fontSize=10)))
+    elements.append(Spacer(1, 0.3*inch))
+    
+    table_data = [["Producto", "Categoría", "Precio", "Costo", "Margen", "Stock"]]
+    for p in products:
+        margin = ((p["price"] - p["cost"]) / p["price"] * 100) if p["price"] > 0 else 0
+        stock = inventory.get(p["id"], "-") if inventory else "-"
+        table_data.append([
+            p["name"][:25],
+            categories.get(p.get("category_id"), "Sin categoría")[:15],
+            f"${p['price']:,.2f}",
+            f"${p['cost']:,.2f}",
+            f"{margin:.1f}%",
+            str(stock)
+        ])
+    
+    products_table = Table(table_data, colWidths=[2.2*inch, 1.3*inch, 0.9*inch, 0.9*inch, 0.8*inch, 0.7*inch])
+    products_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#708238')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e0e0e0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+    ]))
+    elements.append(products_table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    
+    filename = f"catalogo_{business_name}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 # ============== INVENTORY ROUTES ==============
 
 @api_router.get("/inventory", response_model=List[InventoryItemResponse])

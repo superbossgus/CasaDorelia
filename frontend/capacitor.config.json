@@ -4,5 +4,23 @@
   "webDir": "build",
   "server": {
     "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#0D0D0D",
+      "showSpinner": true,
+      "spinnerColor": "#708238"
+    },
+    "StatusBar": {
+      "style": "Dark",
+      "backgroundColor": "#0D0D0D"
+    }
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "android": {
+    "backgroundColor": "#0D0D0D"
   }
 }

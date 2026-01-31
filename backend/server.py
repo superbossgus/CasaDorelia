@@ -1860,7 +1860,8 @@ async def get_sales(
     end_date: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {}
+    tenant_filter = get_tenant_filter(current_user)
+    query = {**tenant_filter}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
@@ -1876,7 +1877,7 @@ async def get_sales(
     
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     result = []
     for s in sales:
@@ -1887,15 +1888,16 @@ async def get_sales(
 
 @api_router.post("/sales", response_model=SaleResponse)
 async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current_user)):
+    tenant_filter = get_tenant_filter(current_user)
     sale_id = str(uuid.uuid4())
     
     subtotal = sum(item.subtotal for item in sale.items)
     tax = subtotal * 0.16
     total = subtotal + tax
     
-    products = {p["id"]: p for p in await db.products.find({}, {"_id": 0}).to_list(1000)}
-    recipes = {r["product_id"]: r for r in await db.recipes.find({}, {"_id": 0}).to_list(1000)}
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    products = {p["id"]: p for p in await db.products.find(tenant_filter, {"_id": 0}).to_list(1000)}
+    recipes = {r["product_id"]: r for r in await db.recipes.find(tenant_filter, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
     
     cost_total = 0
     enriched_items = []

@@ -1,13 +1,24 @@
 # Doré - Sistema de Gestión de Cafeterías
 
 ## Resumen del Proyecto
-Sistema web integral para gestión de 3 cafeterías con control de ventas, inventario, costos, menús y utilidad.
+Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant**. Permite controlar ventas, inventario, costos, menús y utilidad. Diseñado para vender a múltiples negocios de cafeterías.
 
 ## Fecha de Creación
 28 de Enero, 2026
 
 ## Última Actualización
-29 de Enero, 2026
+31 de Enero, 2026
+
+## Modelo de Negocio: SaaS Multi-Tenant
+- **Prueba gratuita**: 7 días
+- **Planes de suscripción** (MXN/mes):
+  - 1 Sucursal: $399
+  - 2 Sucursales: $599
+  - 3-5 Sucursales: $799
+  - 5-10 Sucursales: $999
+  - 10-20 Sucursales: $1,199
+- **Pagos**: Stripe (tarjeta de crédito/débito)
+- **Registro**: Abierto (cualquiera puede registrarse)
 
 ## Arquitectura Técnica
 - **Frontend**: React 19 + Tailwind CSS + Shadcn UI + Recharts

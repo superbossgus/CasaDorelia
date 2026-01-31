@@ -24,8 +24,10 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - **Frontend**: React 19 + Tailwind CSS + Shadcn UI + Recharts
 - **Backend**: FastAPI + Python
 - **Base de Datos**: MongoDB
-- **Autenticación**: JWT
+- **Autenticación**: JWT con soporte multi-tenant
+- **Pagos**: Stripe (emergentintegrations)
 - **Notificaciones**: Twilio WhatsApp API
+- **Mobile**: Capacitor (iOS/Android)
 
 ## Roles de Usuario
 1. **Administrador**: Acceso completo al sistema

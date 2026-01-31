@@ -74,6 +74,58 @@ class UserRole:
     ADMIN = "admin"
     GERENTE = "gerente"
     CAJERO = "cajero"
+    SUPERADMIN = "superadmin"  # For platform owner
+
+# ============== TENANT/SUBSCRIPTION MODELS ==============
+
+class TenantStatus:
+    TRIAL = "trial"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    CANCELLED = "cancelled"
+
+class TenantCreate(BaseModel):
+    business_name: str
+    owner_name: str
+    owner_email: EmailStr
+    owner_password: str
+    phone: Optional[str] = None
+
+class TenantResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    business_name: str
+    owner_email: str
+    status: str
+    plan_id: Optional[str] = None
+    trial_ends_at: Optional[str] = None
+    subscription_ends_at: Optional[str] = None
+    max_branches: int = 1
+    created_at: str
+
+class SubscriptionPlanResponse(BaseModel):
+    plan_id: str
+    name: str
+    max_branches: int
+    price: float
+    currency: str
+
+class SubscriptionCheckoutRequest(BaseModel):
+    plan_id: str
+    origin_url: str
+
+class PaymentTransactionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    tenant_id: str
+    plan_id: str
+    amount: float
+    currency: str
+    status: str
+    session_id: Optional[str] = None
+    created_at: str
+
+# ============== USER MODELS ==============
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -81,6 +133,7 @@ class UserBase(BaseModel):
     role: str = UserRole.CAJERO
     cafeteria_id: Optional[str] = None
     is_active: bool = True
+    tenant_id: Optional[str] = None  # Added for multi-tenant
 
 class UserCreate(UserBase):
     password: str

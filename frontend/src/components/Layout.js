@@ -52,9 +52,12 @@ const Layout = ({ children }) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [alertsRes, subRes] = await Promise.all([
+        const [alertsRes, subRes, tenantRes] = await Promise.all([
           axios.get(`${API}/ingredient-inventory/alerts`),
           axios.get(`${API}/tenants/subscription-status`, {
+            headers: { Authorization: `Bearer ${token}` }
+          }).catch(() => null),
+          axios.get(`${API}/tenants/me`, {
             headers: { Authorization: `Bearer ${token}` }
           }).catch(() => null)
         ]);
@@ -64,6 +67,10 @@ const Layout = ({ children }) => {
         
         if (subRes?.data) {
           setSubscriptionStatus(subRes.data);
+        }
+        
+        if (tenantRes?.data) {
+          setTenantInfo(tenantRes.data);
         }
       } catch (error) {
         console.error("Error fetching data:", error);

@@ -103,6 +103,7 @@ const Layout = ({ children }) => {
     { path: "/cafeterias", label: "Cafeterías", icon: Store, roles: ["admin"] },
     { path: "/users", label: "Usuarios", icon: Users, roles: ["admin"] },
     { path: "/whatsapp-alerts", label: "Alertas WhatsApp", icon: MessageCircle, roles: ["admin"] },
+    { path: "/business-settings", label: "Mi Negocio", icon: Settings, roles: ["admin"] },
   ];
 
   const filteredNavItems = navItems.filter(item => item.roles.includes(user?.role));

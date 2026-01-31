@@ -74,13 +74,10 @@ const Layout = ({ children }) => {
       return () => clearInterval(interval);
     }
   }, [token]);
-    
-    return () => clearInterval(interval);
-  }, []);
 
   const handleLogout = () => {
     logout();
-    navigate("/login");
+    navigate("/");
   };
 
   const navItems = [

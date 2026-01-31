@@ -32,6 +32,7 @@ import {
   Boxes,
   MessageCircle,
   AlertTriangle,
+  Crown,
 } from "lucide-react";
 import axios from "axios";
 
@@ -40,24 +41,39 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const Layout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
-  const { user, logout, isAdmin, canManage } = useAuth();
+  const [subscriptionStatus, setSubscriptionStatus] = useState(null);
+  const { user, logout, isAdmin, canManage, token } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Fetch alert count for badge
+  // Fetch alert count and subscription status
   useEffect(() => {
-    const fetchAlertCount = async () => {
+    const fetchData = async () => {
       try {
-        const response = await axios.get(`${API}/ingredient-inventory/alerts`);
-        const criticalAlerts = (response.data || []).filter(a => a.alert_type === "critical");
+        const [alertsRes, subRes] = await Promise.all([
+          axios.get(`${API}/ingredient-inventory/alerts`),
+          axios.get(`${API}/tenants/subscription-status`, {
+            headers: { Authorization: `Bearer ${token}` }
+          }).catch(() => null)
+        ]);
+        
+        const criticalAlerts = (alertsRes.data || []).filter(a => a.alert_type === "critical");
         setAlertCount(criticalAlerts.length);
+        
+        if (subRes?.data) {
+          setSubscriptionStatus(subRes.data);
+        }
       } catch (error) {
-        console.error("Error fetching alerts:", error);
+        console.error("Error fetching data:", error);
       }
     };
 
-    fetchAlertCount();
-    const interval = setInterval(fetchAlertCount, 60000); // Update every minute
+    if (token) {
+      fetchData();
+      const interval = setInterval(fetchData, 60000); // Update every minute
+      return () => clearInterval(interval);
+    }
+  }, [token]);
     
     return () => clearInterval(interval);
   }, []);

@@ -875,7 +875,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 @api_router.get("/users", response_model=List[UserResponse])
 async def get_users(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    users = await db.users.find({}, {"_id": 0, "password": 0}).to_list(1000)
+    tenant_filter = get_tenant_filter(current_user)
+    users = await db.users.find(tenant_filter, {"_id": 0, "password": 0}).to_list(1000)
     return [UserResponse(**u) for u in users]
 
 @api_router.post("/users", response_model=UserResponse)
@@ -889,13 +890,16 @@ async def create_user(user: UserCreate, current_user: dict = Depends(require_rol
     user_dict["id"] = user_id
     user_dict["password"] = hash_password(user.password)
     user_dict["created_at"] = datetime.now(timezone.utc).isoformat()
+    user_dict["tenant_id"] = current_user.get("tenant_id")  # Assign to same tenant
     
     await db.users.insert_one(user_dict)
-    return UserResponse(id=user_id, email=user.email, name=user.name, role=user.role, cafeteria_id=user.cafeteria_id)
+    return UserResponse(id=user_id, email=user.email, name=user.name, role=user.role, cafeteria_id=user.cafeteria_id, tenant_id=user_dict["tenant_id"])
 
 @api_router.put("/users/{user_id}", response_model=UserResponse)
 async def update_user(user_id: str, user: UserBase, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.users.update_one({"id": user_id}, {"$set": user.model_dump()})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = user_id
+    result = await db.users.update_one(tenant_filter, {"$set": user.model_dump()})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password": 0})
@@ -903,7 +907,9 @@ async def update_user(user_id: str, user: UserBase, current_user: dict = Depends
 
 @api_router.delete("/users/{user_id}")
 async def delete_user(user_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
-    result = await db.users.delete_one({"id": user_id})
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_filter["id"] = user_id
+    result = await db.users.delete_one(tenant_filter)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return {"message": "Usuario eliminado"}
@@ -912,11 +918,18 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_roles([
 
 @api_router.get("/cafeterias", response_model=List[CafeteriaResponse])
 async def get_cafeterias(current_user: dict = Depends(get_current_user)):
-    cafeterias = await db.cafeterias.find({}, {"_id": 0}).to_list(100)
+    tenant_filter = get_tenant_filter(current_user)
+    cafeterias = await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)
     return [CafeteriaResponse(**c) for c in cafeterias]
 
 @api_router.post("/cafeterias", response_model=CafeteriaResponse)
 async def create_cafeteria(cafeteria: CafeteriaCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    tenant_id = current_user.get("tenant_id")
+    
+    # Check tenant limit
+    if tenant_id and not await check_tenant_limit(tenant_id, "cafeterias"):
+        raise HTTPException(status_code=403, detail="Has alcanzado el límite de sucursales de tu plan. Actualiza tu suscripción para agregar más.")
+    
     cafeteria_id = str(uuid.uuid4())
     cafeteria_dict = cafeteria.model_dump()
     cafeteria_dict["id"] = cafeteria_id

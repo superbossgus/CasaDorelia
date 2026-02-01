@@ -62,6 +62,15 @@ if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
 # Stripe Config
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 
+# Resend Config for Password Recovery
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+# Password Reset Token Expiry (in hours)
+PASSWORD_RESET_EXPIRY_HOURS = 1
+
 # Subscription Plans (MXN)
 SUBSCRIPTION_PLANS = {
     "plan_1": {"name": "1 Sucursal", "max_branches": 1, "price": 399.00, "currency": "mxn"},

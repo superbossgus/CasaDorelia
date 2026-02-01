@@ -173,6 +173,19 @@ class TokenResponse(BaseModel):
     token: str
     user: UserResponse
 
+# ============== PASSWORD RECOVERY MODELS ==============
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+class PasswordResetVerify(BaseModel):
+    token: str
+    new_password: str
+
+class PasswordResetResponse(BaseModel):
+    message: str
+    success: bool
+
 class CafeteriaBase(BaseModel):
     name: str
     address: str

@@ -1019,6 +1019,148 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return UserResponse(**user)
 
+# ============== PASSWORD RECOVERY ROUTES ==============
+
+@api_router.post("/auth/forgot-password", response_model=PasswordResetResponse)
+async def forgot_password(request: PasswordResetRequest):
+    """Request password reset - sends email with reset link"""
+    user = await db.users.find_one({"email": request.email}, {"_id": 0})
+    
+    # Always return success to prevent email enumeration attacks
+    if not user:
+        logger.info(f"Password reset requested for non-existent email: {request.email}")
+        return PasswordResetResponse(
+            message="Si el correo existe, recibirás un enlace para restablecer tu contraseña",
+            success=True
+        )
+    
+    # Generate secure token
+    reset_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=PASSWORD_RESET_EXPIRY_HOURS)
+    
+    # Store reset token in database
+    await db.password_resets.delete_many({"user_id": user["id"]})  # Remove old tokens
+    await db.password_resets.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "email": request.email,
+        "token": reset_token,
+        "expires_at": expires_at.isoformat(),
+        "used": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    # Send email with reset link
+    if RESEND_API_KEY:
+        try:
+            # Get tenant info for branding if applicable
+            tenant_name = "Doré"
+            if user.get("tenant_id"):
+                tenant = await db.tenants.find_one({"id": user["tenant_id"]}, {"_id": 0})
+                if tenant:
+                    tenant_name = tenant.get("business_name", "Doré")
+            
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+            </head>
+            <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f4f4f4;">
+                <div style="background-color: #0D0D0D; padding: 30px; border-radius: 10px;">
+                    <h1 style="color: #708238; margin-bottom: 20px; text-align: center;">{tenant_name}</h1>
+                    <h2 style="color: #ffffff; margin-bottom: 20px;">Restablecer Contraseña</h2>
+                    <p style="color: #A1A1AA; line-height: 1.6;">
+                        Hola <strong style="color: #ffffff;">{user.get('name', 'Usuario')}</strong>,
+                    </p>
+                    <p style="color: #A1A1AA; line-height: 1.6;">
+                        Recibimos una solicitud para restablecer tu contraseña. Usa el siguiente código para completar el proceso:
+                    </p>
+                    <div style="background-color: #161616; border: 2px solid #708238; border-radius: 8px; padding: 20px; margin: 25px 0; text-align: center;">
+                        <p style="color: #A1A1AA; margin: 0 0 10px 0; font-size: 14px;">Tu código de recuperación:</p>
+                        <p style="color: #708238; font-size: 28px; font-weight: bold; letter-spacing: 3px; margin: 0;">{reset_token}</p>
+                    </div>
+                    <p style="color: #A1A1AA; line-height: 1.6;">
+                        Este código expirará en <strong style="color: #ffffff;">1 hora</strong>.
+                    </p>
+                    <p style="color: #71717A; font-size: 12px; margin-top: 30px; border-top: 1px solid #27272A; padding-top: 20px;">
+                        Si no solicitaste este cambio, puedes ignorar este correo. Tu contraseña no será modificada.
+                    </p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            params = {
+                "from": SENDER_EMAIL,
+                "to": [request.email],
+                "subject": f"Restablecer contraseña - {tenant_name}",
+                "html": html_content
+            }
+            
+            await asyncio.to_thread(resend.Emails.send, params)
+            logger.info(f"Password reset email sent to: {request.email}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send password reset email: {str(e)}")
+            # Don't expose email sending errors to the user
+    else:
+        logger.warning("RESEND_API_KEY not configured, skipping email send")
+    
+    return PasswordResetResponse(
+        message="Si el correo existe, recibirás un enlace para restablecer tu contraseña",
+        success=True
+    )
+
+@api_router.post("/auth/reset-password", response_model=PasswordResetResponse)
+async def reset_password(request: PasswordResetVerify):
+    """Reset password using the token from email"""
+    # Find valid reset token
+    reset_record = await db.password_resets.find_one({
+        "token": request.token,
+        "used": False
+    }, {"_id": 0})
+    
+    if not reset_record:
+        raise HTTPException(status_code=400, detail="Código inválido o expirado")
+    
+    # Check expiration
+    expires_at = datetime.fromisoformat(reset_record["expires_at"].replace("Z", "+00:00"))
+    if datetime.now(timezone.utc) > expires_at:
+        # Mark as expired
+        await db.password_resets.update_one(
+            {"token": request.token},
+            {"$set": {"used": True}}
+        )
+        raise HTTPException(status_code=400, detail="El código ha expirado. Solicita uno nuevo.")
+    
+    # Validate password length
+    if len(request.new_password) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    
+    # Update user password
+    hashed_password = hash_password(request.new_password)
+    result = await db.users.update_one(
+        {"id": reset_record["user_id"]},
+        {"$set": {"password": hashed_password}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    
+    # Mark token as used
+    await db.password_resets.update_one(
+        {"token": request.token},
+        {"$set": {"used": True}}
+    )
+    
+    logger.info(f"Password reset successful for user_id: {reset_record['user_id']}")
+    
+    return PasswordResetResponse(
+        message="Contraseña actualizada correctamente. Ya puedes iniciar sesión.",
+        success=True
+    )
+
 # ============== USER ROUTES ==============
 
 @api_router.get("/users", response_model=List[UserResponse])

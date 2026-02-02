@@ -2831,13 +2831,15 @@ async def get_ingredient_consumption(cafeteria_id: Optional[str] = None, days: i
 @api_router.get("/reports/theoretical-vs-actual")
 async def get_theoretical_vs_actual(cafeteria_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     """Compare theoretical inventory (based on sales) vs actual inventory"""
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    tenant_filter = get_tenant_filter(current_user)
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
     
-    # Get current inventory
-    actual_inventory = await db.ingredient_inventory.find({"cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)
+    # Get current inventory (already filtered by cafeteria)
+    actual_inventory = await db.ingredient_inventory.find({**tenant_filter, "cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)
     
     # Calculate theoretical consumption from all sales
     all_movements = await db.ingredient_movements.find({
+        **tenant_filter,
         "cafeteria_id": cafeteria_id,
         "movement_type": "consumo_venta"
     }, {"_id": 0}).to_list(50000)

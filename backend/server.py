@@ -1061,6 +1061,23 @@ async def forgot_password(request: PasswordResetRequest):
                 if tenant:
                     tenant_name = tenant.get("business_name", "Doré")
             
+            # Build direct reset link if origin_url provided
+            reset_link = ""
+            reset_button_html = ""
+            if request.origin_url:
+                base_url = request.origin_url.rstrip('/')
+                reset_link = f"{base_url}/forgot-password?token={reset_token}"
+                reset_button_html = f"""
+                    <div style="text-align: center; margin: 25px 0;">
+                        <a href="{reset_link}" style="display: inline-block; background-color: #708238; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                            Restablecer Contraseña
+                        </a>
+                    </div>
+                    <p style="color: #71717A; font-size: 12px; text-align: center; margin-top: 10px;">
+                        O copia este código manualmente:
+                    </p>
+                """
+            
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -1075,11 +1092,12 @@ async def forgot_password(request: PasswordResetRequest):
                         Hola <strong style="color: #ffffff;">{user.get('name', 'Usuario')}</strong>,
                     </p>
                     <p style="color: #A1A1AA; line-height: 1.6;">
-                        Recibimos una solicitud para restablecer tu contraseña. Usa el siguiente código para completar el proceso:
+                        Recibimos una solicitud para restablecer tu contraseña.
                     </p>
+                    {reset_button_html}
                     <div style="background-color: #161616; border: 2px solid #708238; border-radius: 8px; padding: 20px; margin: 25px 0; text-align: center;">
                         <p style="color: #A1A1AA; margin: 0 0 10px 0; font-size: 14px;">Tu código de recuperación:</p>
-                        <p style="color: #708238; font-size: 28px; font-weight: bold; letter-spacing: 3px; margin: 0;">{reset_token}</p>
+                        <p style="color: #708238; font-size: 24px; font-weight: bold; letter-spacing: 2px; margin: 0; word-break: break-all;">{reset_token}</p>
                     </div>
                     <p style="color: #A1A1AA; line-height: 1.6;">
                         Este código expirará en <strong style="color: #ffffff;">1 hora</strong>.

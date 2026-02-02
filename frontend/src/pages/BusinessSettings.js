@@ -88,6 +88,10 @@ const BusinessSettings = () => {
       });
       toast.success("Logo eliminado");
       setTenant({ ...tenant, logo_url: null });
+      // Reset file input to allow re-selecting the same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     } catch (error) {
       toast.error("Error al eliminar logo");
     }

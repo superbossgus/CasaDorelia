@@ -2796,14 +2796,15 @@ async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: 
 @api_router.get("/reports/ingredient-consumption")
 async def get_ingredient_consumption(cafeteria_id: Optional[str] = None, days: int = 30, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     """Report of ingredient consumption over time"""
+    tenant_filter = get_tenant_filter(current_user)
     start_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     
-    query = {"movement_type": "consumo_venta", "created_at": {"$gte": start_date}}
+    query = {**tenant_filter, "movement_type": "consumo_venta", "created_at": {"$gte": start_date}}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     
     movements = await db.ingredient_movements.find(query, {"_id": 0}).to_list(10000)
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
     
     consumption = {}
     for mov in movements:

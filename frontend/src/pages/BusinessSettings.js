@@ -130,7 +130,7 @@ const BusinessSettings = () => {
   }
 
   const logoUrl = tenant?.logo_url 
-    ? `${API}${tenant.logo_url}` 
+    ? `${API}${tenant.logo_url}?t=${logoTimestamp}` 
     : null;
 
   return (

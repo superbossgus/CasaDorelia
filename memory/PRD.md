@@ -105,8 +105,9 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - Requiere credenciales de developer.clip.mx para activación
 
 ## Credenciales de Prueba
-- **Email**: admin@cafecontrol.com
-- **Password**: admin123
+- **Email**: gustavo@lepaindore.com.mx
+- **Password**: (la que configuraste en recuperación)
+- **Super Admin**: superadmin@dore.com / superadmin123
 
 ## Datos de Prueba
 El seed data genera:

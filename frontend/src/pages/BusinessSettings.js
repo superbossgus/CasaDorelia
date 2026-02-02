@@ -18,6 +18,7 @@ const BusinessSettings = () => {
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({ business_name: "", phone: "" });
+  const [logoTimestamp, setLogoTimestamp] = useState(Date.now()); // Cache buster
   const fileInputRef = useRef(null);
 
   useEffect(() => {

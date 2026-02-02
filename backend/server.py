@@ -2745,8 +2745,10 @@ async def get_sales_comparison(current_user: dict = Depends(require_roles([UserR
     month_start = today.replace(day=1)
     month_str = month_start.isoformat()
     
-    sales = await db.sales.find({"created_at": {"$gte": month_str}}, {"_id": 0}).to_list(10000)
-    cafeterias = await db.cafeterias.find({}, {"_id": 0}).to_list(100)
+    # Apply tenant filter to both sales and cafeterias queries
+    sales_query = {**tenant_filter, "created_at": {"$gte": month_str}}
+    sales = await db.sales.find(sales_query, {"_id": 0}).to_list(10000)
+    cafeterias = await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)
     
     comparison = []
     for cafe in cafeterias:
@@ -2764,11 +2766,13 @@ async def get_sales_comparison(current_user: dict = Depends(require_roles([UserR
 
 @api_router.get("/reports/profit-analysis")
 async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
+    tenant_filter = get_tenant_filter(current_user)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = today.replace(day=1)
     month_str = month_start.isoformat()
     
-    query = {"created_at": {"$gte": month_str}}
+    # Apply tenant filter
+    query = {**tenant_filter, "created_at": {"$gte": month_str}}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     

@@ -41,7 +41,9 @@ const Reports = () => {
 
   const fetchCafeterias = async () => {
     try {
-      const response = await axios.get(`${API}/cafeterias`);
+      const response = await axios.get(`${API}/cafeterias`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setCafeterias(response.data);
     } catch (error) {
       console.error("Error fetching cafeterias:", error);
@@ -51,7 +53,9 @@ const Reports = () => {
   const fetchReports = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API}/reports/sales-comparison`);
+      const response = await axios.get(`${API}/reports/sales-comparison`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setComparison(response.data);
     } catch (error) {
       toast.error("Error al cargar reportes");
@@ -63,7 +67,10 @@ const Reports = () => {
   const fetchProfitAnalysis = async () => {
     try {
       const params = selectedCafeteria !== "all" ? { cafeteria_id: selectedCafeteria } : {};
-      const response = await axios.get(`${API}/reports/profit-analysis`, { params });
+      const response = await axios.get(`${API}/reports/profit-analysis`, { 
+        params,
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setProfitAnalysis(response.data);
     } catch (error) {
       console.error("Error fetching profit analysis:", error);

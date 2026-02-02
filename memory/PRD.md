@@ -150,6 +150,8 @@ El seed data genera:
 
 ## Endpoints API Principales
 - `POST /api/auth/login` - Autenticación
+- `POST /api/auth/forgot-password` - Solicitar recuperación de contraseña
+- `POST /api/auth/reset-password` - Restablecer contraseña con código
 - `GET /api/dashboard/stats` - Estadísticas dashboard
 - `GET/POST /api/sales` - Gestión de ventas
 - `GET/POST /api/inventory` - Control de inventario de productos

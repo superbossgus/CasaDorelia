@@ -177,6 +177,7 @@ class TokenResponse(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     email: EmailStr
+    origin_url: Optional[str] = None  # Frontend URL for direct link
 
 class PasswordResetVerify(BaseModel):
     token: str

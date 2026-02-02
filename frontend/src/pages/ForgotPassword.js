@@ -35,7 +35,10 @@ const ForgotPassword = () => {
     setIsLoading(true);
 
     try {
-      await axios.post(`${API}/auth/forgot-password`, { email });
+      await axios.post(`${API}/auth/forgot-password`, { 
+        email,
+        origin_url: window.location.origin 
+      });
       toast.success("Si el correo existe, recibirás un código de recuperación");
       setStep(2);
     } catch (error) {

@@ -72,6 +72,7 @@ const BusinessSettings = () => {
       });
       toast.success("Logo subido correctamente");
       setTenant({ ...tenant, logo_url: response.data.logo_url });
+      setLogoTimestamp(Date.now()); // Update timestamp to bust cache
     } catch (error) {
       toast.error(error.response?.data?.detail || "Error al subir logo");
     } finally {

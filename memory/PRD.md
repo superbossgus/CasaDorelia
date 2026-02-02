@@ -27,6 +27,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - **Autenticación**: JWT con soporte multi-tenant
 - **Pagos**: Stripe (emergentintegrations)
 - **Notificaciones**: Twilio WhatsApp API
+- **Email**: Resend (recuperación de contraseña)
 - **Mobile**: Capacitor (iOS/Android)
 
 ## Roles de Usuario

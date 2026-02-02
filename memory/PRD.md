@@ -92,6 +92,14 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
   - Reporte de ventas en Excel
   - Catálogo de productos en PDF
 
+### Recuperación de Contraseña (1-Feb-2026)
+- ✅ **Solicitud de recuperación**: Endpoint para solicitar código por email
+- ✅ **Envío de email**: Integración con Resend para emails transaccionales
+- ✅ **Enlace directo**: Botón en email que lleva a la página con código prellenado
+- ✅ **Tokens seguros**: Códigos de un solo uso con expiración de 1 hora
+- ✅ **UI completa**: Flujo de 3 pasos (email → código + nueva contraseña → éxito)
+- ✅ **Branding por tenant**: Email incluye nombre del negocio del usuario
+
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real
 - Requiere credenciales de developer.clip.mx para activación

@@ -21,6 +21,10 @@ import Subscription from "./pages/Subscription";
 import SubscriptionSuccess from "./pages/SubscriptionSuccess";
 import SuperAdmin from "./pages/SuperAdmin";
 import BusinessSettings from "./pages/BusinessSettings";
+import LoyaltyAdmin from "./pages/LoyaltyAdmin";
+import LoyaltyLogin from "./pages/LoyaltyLogin";
+import LoyaltyRegister from "./pages/LoyaltyRegister";
+import LoyaltyRewards from "./pages/LoyaltyRewards";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {

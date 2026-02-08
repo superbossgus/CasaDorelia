@@ -156,7 +156,7 @@ const Login = () => {
                   </div>
                   <div className="flex justify-end">
                     <Link 
-                      to="/forgot-password" 
+                      to="/admin/forgot-password" 
                       className="text-sm text-[#708238] hover:text-[#8a9f4a] transition-colors"
                       data-testid="forgot-password-link"
                     >

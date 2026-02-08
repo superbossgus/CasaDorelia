@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import Landing from "./pages/Landing";
+import CustomerLanding from "./pages/CustomerLanding";
 import Dashboard from "./pages/Dashboard";
 import Sales from "./pages/Sales";
 import Inventory from "./pages/Inventory";
@@ -39,7 +40,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
   }
   
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/admin" replace />;
   }
   
   // Super admin should go to their panel
@@ -59,9 +60,20 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
+          {/* ========== CUSTOMER ROUTES (Public) ========== */}
+          <Route path="/" element={<CustomerLanding />} />
+          <Route path="/loyalty/login" element={<LoyaltyLogin />} />
+          <Route path="/loyalty/register" element={<LoyaltyRegister />} />
+          <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
+          
+          {/* ========== BUSINESS/ADMIN ROUTES ========== */}
+          <Route path="/admin" element={<Login />} />
+          <Route path="/admin/forgot-password" element={<ForgotPassword />} />
+          <Route path="/registro-negocio" element={<Landing />} />
+          
+          {/* Legacy route redirect */}
+          <Route path="/login" element={<Navigate to="/admin" replace />} />
+          <Route path="/forgot-password" element={<Navigate to="/admin/forgot-password" replace />} />
           
           <Route path="/subscription" element={
             <ProtectedRoute>
@@ -170,11 +182,6 @@ function App() {
               <Layout><LoyaltyAdmin /></Layout>
             </ProtectedRoute>
           } />
-          
-          {/* Loyalty Program Routes (Public for customers) */}
-          <Route path="/loyalty/login" element={<LoyaltyLogin />} />
-          <Route path="/loyalty/register" element={<LoyaltyRegister />} />
-          <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
         </Routes>
         <Toaster 
           position="top-right" 

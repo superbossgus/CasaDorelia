@@ -101,6 +101,25 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **UI completa**: Flujo de 3 pasos (email → código + nueva contraseña → éxito)
 - ✅ **Branding por tenant**: Email incluye nombre del negocio del usuario
 
+### Programa de Lealtad (8-Feb-2026)
+- ✅ **Registro de Clientes**: App separada para clientes finales (`/loyalty/register`)
+- ✅ **Sistema de Puntos**: $10 MXN = 1 punto con multiplicadores por nivel
+- ✅ **Niveles de Gamificación**:
+  - ☕ Bronce (0-199 pts): 1x multiplicador
+  - ⭐ Plata (200-499 pts): 1.25x multiplicador
+  - 👑 Oro (500+ pts): 1.5x multiplicador + Refill gratis
+- ✅ **Catálogo de Descuentos**:
+  - 50 pts = 10% descuento
+  - 100 pts = 20% descuento
+  - ... hasta 500 pts = 100% descuento (máx $200)
+- ✅ **Cupones Digitales**: Código único con expiración de 30 días
+- ✅ **QR en Tickets**: Generación de QR para acumular puntos
+- ✅ **Validación de Cupones**: Módulo para cajeros
+- ✅ **Regalo de Cumpleaños**: Cupón automático el día del cumpleaños
+- ✅ **Panel Admin**: Dashboard de estadísticas y gestión de clientes
+- ✅ **Expiración de Puntos**: 6 meses de vigencia
+- ✅ **Bono de Bienvenida**: 10 puntos al registrarse
+
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real
 - Requiere credenciales de developer.clip.mx para activación

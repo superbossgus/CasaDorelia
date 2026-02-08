@@ -3203,6 +3203,608 @@ async def get_critical_ingredient_alerts():
     
     return sorted(critical_alerts, key=lambda x: x["days_until_stockout"])
 
+# ============== LOYALTY PROGRAM ROUTES ==============
+
+def calculate_level(total_points: int) -> str:
+    """Calculate customer level based on total points"""
+    if total_points >= LOYALTY_LEVELS["oro"]["min_points"]:
+        return "oro"
+    elif total_points >= LOYALTY_LEVELS["plata"]["min_points"]:
+        return "plata"
+    return "bronce"
+
+def get_level_multiplier(level: str) -> float:
+    """Get points multiplier for a level"""
+    return LOYALTY_LEVELS.get(level, LOYALTY_LEVELS["bronce"])["multiplier"]
+
+def calculate_points_from_amount(amount: float, level: str) -> int:
+    """Calculate points earned from purchase amount"""
+    base_points = int(amount / POINTS_PER_AMOUNT)
+    multiplier = get_level_multiplier(level)
+    return int(base_points * multiplier)
+
+def generate_coupon_code() -> str:
+    """Generate unique coupon code"""
+    return f"DORE-{secrets.token_hex(4).upper()}"
+
+def generate_qr_data(sale_id: str, tenant_id: str, amount: float) -> str:
+    """Generate QR code data for a sale"""
+    data = {
+        "sale_id": sale_id,
+        "tenant_id": tenant_id,
+        "amount": amount,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    return base64.b64encode(json.dumps(data).encode()).decode()
+
+def parse_qr_data(qr_code: str) -> dict:
+    """Parse QR code data"""
+    try:
+        decoded = base64.b64decode(qr_code).decode()
+        return json.loads(decoded)
+    except:
+        raise HTTPException(status_code=400, detail="Código QR inválido")
+
+# Customer Registration (Public - for app users)
+@api_router.post("/loyalty/register")
+async def register_loyalty_customer(customer: LoyaltyCustomerCreate, tenant_id: str):
+    """Register a new loyalty program customer"""
+    # Verify tenant exists
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+    
+    # Check if email already registered for this tenant
+    existing = await db.loyalty_customers.find_one({
+        "email": customer.email,
+        "tenant_id": tenant_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Este email ya está registrado")
+    
+    customer_id = str(uuid.uuid4())
+    customer_dict = {
+        "id": customer_id,
+        "tenant_id": tenant_id,
+        "name": customer.name,
+        "email": customer.email,
+        "phone": customer.phone,
+        "password": hash_password(customer.password),
+        "birthday": customer.birthday,
+        "total_points": 0,
+        "lifetime_points": 0,
+        "current_level": "bronce",
+        "visits_this_month": 0,
+        "last_visit": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.loyalty_customers.insert_one(customer_dict)
+    
+    # Create welcome bonus (10 points)
+    welcome_bonus = {
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_id,
+        "tenant_id": tenant_id,
+        "points": 10,
+        "transaction_type": "earned",
+        "description": "Bono de bienvenida",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=POINTS_EXPIRY_MONTHS * 30)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.point_transactions.insert_one(welcome_bonus)
+    await db.loyalty_customers.update_one(
+        {"id": customer_id},
+        {"$inc": {"total_points": 10, "lifetime_points": 10}}
+    )
+    
+    # Generate token for auto-login
+    token = jwt.encode({
+        "customer_id": customer_id,
+        "email": customer.email,
+        "tenant_id": tenant_id,
+        "type": "loyalty_customer",
+        "exp": datetime.now(timezone.utc) + timedelta(days=30)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    return {
+        "message": "Registro exitoso. ¡Bienvenido al programa de lealtad!",
+        "token": token,
+        "customer_id": customer_id,
+        "welcome_bonus": 10
+    }
+
+# Customer Login
+@api_router.post("/loyalty/login")
+async def login_loyalty_customer(credentials: LoyaltyCustomerLogin):
+    """Login for loyalty program customers"""
+    customer = await db.loyalty_customers.find_one({
+        "email": credentials.email,
+        "tenant_id": credentials.tenant_id
+    }, {"_id": 0})
+    
+    if not customer or not verify_password(credentials.password, customer["password"]):
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    
+    token = jwt.encode({
+        "customer_id": customer["id"],
+        "email": customer["email"],
+        "tenant_id": credentials.tenant_id,
+        "type": "loyalty_customer",
+        "exp": datetime.now(timezone.utc) + timedelta(days=30)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    return {
+        "token": token,
+        "customer": LoyaltyCustomerResponse(**customer)
+    }
+
+# Auth dependency for loyalty customers
+async def get_loyalty_customer(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "loyalty_customer":
+            raise HTTPException(status_code=401, detail="Token inválido para cliente de lealtad")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expirado")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+# Get loyalty dashboard for customer
+@api_router.get("/loyalty/dashboard")
+async def get_loyalty_dashboard(customer_data: dict = Depends(get_loyalty_customer)):
+    """Get loyalty program dashboard for logged-in customer"""
+    customer = await db.loyalty_customers.find_one(
+        {"id": customer_data["customer_id"]},
+        {"_id": 0, "password": 0}
+    )
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    
+    tenant_id = customer["tenant_id"]
+    
+    # Get level info
+    current_level = customer.get("current_level", "bronce")
+    level_info = LOYALTY_LEVELS[current_level].copy()
+    
+    # Calculate next level
+    next_level = None
+    points_to_next = 0
+    if current_level == "bronce":
+        next_level = LOYALTY_LEVELS["plata"].copy()
+        points_to_next = LOYALTY_LEVELS["plata"]["min_points"] - customer["total_points"]
+    elif current_level == "plata":
+        next_level = LOYALTY_LEVELS["oro"].copy()
+        points_to_next = LOYALTY_LEVELS["oro"]["min_points"] - customer["total_points"]
+    
+    # Get available rewards
+    rewards = await db.loyalty_rewards.find({"tenant_id": tenant_id, "is_active": True}, {"_id": 0}).to_list(100)
+    if not rewards:
+        # Use default rewards if tenant hasn't customized
+        rewards = [
+            {
+                "id": f"default_{i}",
+                "tenant_id": tenant_id,
+                "name": r["name"],
+                "points_required": r["points"],
+                "discount_percent": r["discount_percent"],
+                "max_discount": r["max_discount"],
+                "is_active": True
+            }
+            for i, r in enumerate(DEFAULT_REWARDS_CATALOG)
+        ]
+    
+    available_rewards = [r for r in rewards if r["points_required"] <= customer["total_points"]]
+    
+    # Get recent transactions
+    transactions = await db.point_transactions.find(
+        {"customer_id": customer["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).limit(10).to_list(10)
+    
+    # Get active coupons
+    coupons = await db.loyalty_coupons.find({
+        "customer_id": customer["id"],
+        "status": "active"
+    }, {"_id": 0}).to_list(20)
+    
+    return {
+        "customer": LoyaltyCustomerResponse(**customer),
+        "level_info": level_info,
+        "next_level": next_level,
+        "points_to_next_level": max(0, points_to_next),
+        "available_rewards": available_rewards,
+        "recent_transactions": transactions,
+        "active_coupons": coupons,
+        "all_rewards": rewards
+    }
+
+# Earn points by scanning QR code
+@api_router.post("/loyalty/earn-points")
+async def earn_points_from_qr(request: EarnPointsRequest, customer_data: dict = Depends(get_loyalty_customer)):
+    """Earn points by scanning QR code from receipt"""
+    qr_data = parse_qr_data(request.qr_code)
+    
+    # Validate QR data
+    sale_id = qr_data.get("sale_id")
+    tenant_id = qr_data.get("tenant_id")
+    amount = qr_data.get("amount", 0)
+    
+    if not sale_id or not tenant_id:
+        raise HTTPException(status_code=400, detail="Código QR inválido")
+    
+    # Verify customer belongs to this tenant
+    if customer_data["tenant_id"] != tenant_id:
+        raise HTTPException(status_code=403, detail="Este código no es válido para tu cuenta")
+    
+    # Check if points already claimed for this sale
+    existing = await db.point_transactions.find_one({
+        "sale_id": sale_id,
+        "customer_id": customer_data["customer_id"]
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Ya reclamaste los puntos de esta compra")
+    
+    # Get customer for level multiplier
+    customer = await db.loyalty_customers.find_one({"id": customer_data["customer_id"]}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    
+    # Calculate points
+    points_earned = calculate_points_from_amount(amount, customer.get("current_level", "bronce"))
+    
+    if points_earned <= 0:
+        raise HTTPException(status_code=400, detail="El monto de compra no genera puntos")
+    
+    # Create transaction
+    transaction = {
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_data["customer_id"],
+        "tenant_id": tenant_id,
+        "points": points_earned,
+        "transaction_type": "earned",
+        "description": f"Compra de ${amount:.2f} MXN",
+        "sale_id": sale_id,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=POINTS_EXPIRY_MONTHS * 30)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.point_transactions.insert_one(transaction)
+    
+    # Update customer points and check level
+    new_total = customer["total_points"] + points_earned
+    new_lifetime = customer["lifetime_points"] + points_earned
+    new_level = calculate_level(new_lifetime)
+    
+    await db.loyalty_customers.update_one(
+        {"id": customer_data["customer_id"]},
+        {
+            "$inc": {"total_points": points_earned, "lifetime_points": points_earned, "visits_this_month": 1},
+            "$set": {"current_level": new_level, "last_visit": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    level_up = new_level != customer.get("current_level", "bronce")
+    
+    return {
+        "points_earned": points_earned,
+        "new_total": new_total,
+        "new_level": new_level,
+        "level_up": level_up,
+        "message": f"¡Ganaste {points_earned} puntos!" + (" ¡Subiste de nivel!" if level_up else "")
+    }
+
+# Redeem reward (generate coupon)
+@api_router.post("/loyalty/redeem")
+async def redeem_reward(reward_id: str, customer_data: dict = Depends(get_loyalty_customer)):
+    """Redeem points for a reward coupon"""
+    customer = await db.loyalty_customers.find_one({"id": customer_data["customer_id"]}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    
+    # Find reward
+    reward = await db.loyalty_rewards.find_one({"id": reward_id, "is_active": True}, {"_id": 0})
+    
+    # Check default rewards if not found
+    if not reward:
+        for i, r in enumerate(DEFAULT_REWARDS_CATALOG):
+            if f"default_{i}" == reward_id:
+                reward = {
+                    "id": reward_id,
+                    "name": r["name"],
+                    "points_required": r["points"],
+                    "discount_percent": r["discount_percent"],
+                    "max_discount": r["max_discount"]
+                }
+                break
+    
+    if not reward:
+        raise HTTPException(status_code=404, detail="Recompensa no encontrada")
+    
+    # Check if customer has enough points
+    if customer["total_points"] < reward["points_required"]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Necesitas {reward['points_required'] - customer['total_points']} puntos más"
+        )
+    
+    # Create coupon
+    coupon_code = generate_coupon_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)  # Coupon valid for 30 days
+    
+    coupon = {
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_data["customer_id"],
+        "tenant_id": customer_data["tenant_id"],
+        "reward_id": reward_id,
+        "reward_name": reward["name"],
+        "discount_percent": reward["discount_percent"],
+        "max_discount": reward.get("max_discount"),
+        "code": coupon_code,
+        "status": "active",
+        "expires_at": expires_at.isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.loyalty_coupons.insert_one(coupon)
+    
+    # Deduct points
+    await db.loyalty_customers.update_one(
+        {"id": customer_data["customer_id"]},
+        {"$inc": {"total_points": -reward["points_required"]}}
+    )
+    
+    # Record transaction
+    transaction = {
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_data["customer_id"],
+        "tenant_id": customer_data["tenant_id"],
+        "points": -reward["points_required"],
+        "transaction_type": "redeemed",
+        "description": f"Canje: {reward['name']}",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.point_transactions.insert_one(transaction)
+    
+    return {
+        "message": f"¡Cupón generado exitosamente!",
+        "coupon": CouponResponse(**coupon)
+    }
+
+# Get customer's active coupons
+@api_router.get("/loyalty/coupons")
+async def get_my_coupons(customer_data: dict = Depends(get_loyalty_customer)):
+    """Get all active coupons for the customer"""
+    coupons = await db.loyalty_coupons.find({
+        "customer_id": customer_data["customer_id"],
+        "status": "active"
+    }, {"_id": 0}).to_list(50)
+    
+    return coupons
+
+# Validate and use coupon (for cashiers)
+@api_router.post("/loyalty/validate-coupon")
+async def validate_coupon(coupon_code: str, current_user: dict = Depends(get_current_user)):
+    """Validate a coupon code (for cashiers)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    coupon = await db.loyalty_coupons.find_one({
+        **tenant_filter,
+        "code": coupon_code,
+        "status": "active"
+    }, {"_id": 0})
+    
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Cupón no encontrado o ya usado")
+    
+    # Check expiration
+    expires_at = datetime.fromisoformat(coupon["expires_at"].replace("Z", "+00:00"))
+    if datetime.now(timezone.utc) > expires_at:
+        await db.loyalty_coupons.update_one({"code": coupon_code}, {"$set": {"status": "expired"}})
+        raise HTTPException(status_code=400, detail="Este cupón ha expirado")
+    
+    # Get customer info
+    customer = await db.loyalty_customers.find_one({"id": coupon["customer_id"]}, {"_id": 0, "password": 0})
+    
+    return {
+        "valid": True,
+        "coupon": coupon,
+        "customer_name": customer.get("name") if customer else "Cliente",
+        "discount_percent": coupon["discount_percent"],
+        "max_discount": coupon.get("max_discount")
+    }
+
+# Use coupon (mark as used)
+@api_router.post("/loyalty/use-coupon")
+async def use_coupon(coupon_code: str, sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark a coupon as used (for cashiers when completing a sale)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    result = await db.loyalty_coupons.update_one(
+        {**tenant_filter, "code": coupon_code, "status": "active"},
+        {"$set": {"status": "used", "used_at": datetime.now(timezone.utc).isoformat(), "sale_id": sale_id}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=400, detail="No se pudo usar el cupón")
+    
+    return {"message": "Cupón aplicado exitosamente"}
+
+# Get QR code data for a sale (for receipts)
+@api_router.get("/loyalty/qr/{sale_id}")
+async def get_sale_qr_code(sale_id: str, current_user: dict = Depends(get_current_user)):
+    """Generate QR code data for a sale (to print on receipt)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    sale = await db.sales.find_one({**tenant_filter, "id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    
+    qr_data = generate_qr_data(sale_id, current_user.get("tenant_id", ""), sale["total"])
+    
+    return {
+        "qr_data": qr_data,
+        "sale_id": sale_id,
+        "amount": sale["total"],
+        "potential_points": calculate_points_from_amount(sale["total"], "bronce")
+    }
+
+# Admin: Get loyalty customers
+@api_router.get("/loyalty/admin/customers")
+async def get_loyalty_customers(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get all loyalty customers for this tenant"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    customers = await db.loyalty_customers.find(
+        tenant_filter,
+        {"_id": 0, "password": 0}
+    ).sort("lifetime_points", -1).to_list(500)
+    
+    return customers
+
+# Admin: Get loyalty stats
+@api_router.get("/loyalty/admin/stats")
+async def get_loyalty_stats(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get loyalty program statistics"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    # Count customers by level
+    total_customers = await db.loyalty_customers.count_documents(tenant_filter)
+    bronze_count = await db.loyalty_customers.count_documents({**tenant_filter, "current_level": "bronce"})
+    silver_count = await db.loyalty_customers.count_documents({**tenant_filter, "current_level": "plata"})
+    gold_count = await db.loyalty_customers.count_documents({**tenant_filter, "current_level": "oro"})
+    
+    # Points statistics
+    pipeline = [
+        {"$match": tenant_filter},
+        {"$group": {
+            "_id": None,
+            "total_points_issued": {"$sum": "$lifetime_points"},
+            "total_points_available": {"$sum": "$total_points"}
+        }}
+    ]
+    points_stats = await db.loyalty_customers.aggregate(pipeline).to_list(1)
+    points_data = points_stats[0] if points_stats else {"total_points_issued": 0, "total_points_available": 0}
+    
+    # Recent redemptions
+    recent_redemptions = await db.point_transactions.find({
+        **tenant_filter,
+        "transaction_type": "redeemed"
+    }, {"_id": 0}).sort("created_at", -1).limit(10).to_list(10)
+    
+    return {
+        "total_customers": total_customers,
+        "customers_by_level": {
+            "bronce": bronze_count,
+            "plata": silver_count,
+            "oro": gold_count
+        },
+        "total_points_issued": points_data.get("total_points_issued", 0),
+        "total_points_available": points_data.get("total_points_available", 0),
+        "points_redeemed": points_data.get("total_points_issued", 0) - points_data.get("total_points_available", 0),
+        "recent_redemptions": recent_redemptions
+    }
+
+# Admin: Manage rewards catalog
+@api_router.get("/loyalty/admin/rewards")
+async def get_rewards_catalog(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get rewards catalog for this tenant"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    rewards = await db.loyalty_rewards.find(tenant_filter, {"_id": 0}).to_list(100)
+    
+    if not rewards:
+        # Return default catalog
+        return [
+            {
+                "id": f"default_{i}",
+                "name": r["name"],
+                "points_required": r["points"],
+                "discount_percent": r["discount_percent"],
+                "max_discount": r["max_discount"],
+                "is_active": True,
+                "is_default": True
+            }
+            for i, r in enumerate(DEFAULT_REWARDS_CATALOG)
+        ]
+    
+    return rewards
+
+# Process birthday rewards (can be called by a cron job)
+@api_router.post("/loyalty/admin/process-birthdays")
+async def process_birthday_rewards(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Send birthday rewards to customers with birthdays today"""
+    tenant_filter = get_tenant_filter(current_user)
+    today = datetime.now(timezone.utc).strftime("%m-%d")  # MM-DD format
+    
+    # Find customers with birthday today
+    customers = await db.loyalty_customers.find(tenant_filter, {"_id": 0}).to_list(10000)
+    
+    birthday_customers = []
+    for c in customers:
+        if c.get("birthday"):
+            try:
+                bday = datetime.fromisoformat(c["birthday"].replace("Z", "+00:00"))
+                if bday.strftime("%m-%d") == today:
+                    birthday_customers.append(c)
+            except:
+                pass
+    
+    rewards_sent = 0
+    for customer in birthday_customers:
+        # Check if already sent this year
+        year = datetime.now(timezone.utc).year
+        existing = await db.point_transactions.find_one({
+            "customer_id": customer["id"],
+            "transaction_type": "birthday_bonus",
+            "created_at": {"$regex": f"^{year}"}
+        })
+        
+        if not existing:
+            # Create birthday bonus coupon (free item up to $100)
+            coupon = {
+                "id": str(uuid.uuid4()),
+                "customer_id": customer["id"],
+                "tenant_id": customer["tenant_id"],
+                "reward_id": "birthday_special",
+                "reward_name": "🎂 Regalo de Cumpleaños",
+                "discount_percent": 100,
+                "max_discount": 100,
+                "code": f"BDAY-{generate_coupon_code()}",
+                "status": "active",
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.loyalty_coupons.insert_one(coupon)
+            
+            # Record transaction
+            transaction = {
+                "id": str(uuid.uuid4()),
+                "customer_id": customer["id"],
+                "tenant_id": customer["tenant_id"],
+                "points": 0,
+                "transaction_type": "birthday_bonus",
+                "description": "🎂 ¡Feliz cumpleaños! Regalo especial",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.point_transactions.insert_one(transaction)
+            rewards_sent += 1
+    
+    return {
+        "message": f"Recompensas de cumpleaños enviadas",
+        "customers_found": len(birthday_customers),
+        "rewards_sent": rewards_sent
+    }
+
+# Get all tenants with loyalty program enabled (for customer app)
+@api_router.get("/loyalty/businesses")
+async def get_loyalty_businesses():
+    """Get list of businesses with active loyalty programs (for customer app)"""
+    tenants = await db.tenants.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "business_name": 1, "logo_url": 1}
+    ).to_list(100)
+    
+    return tenants
+
 # ============== SEED DATA ==============
 
 @api_router.post("/seed")

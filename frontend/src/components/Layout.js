@@ -34,6 +34,7 @@ import {
   AlertTriangle,
   Crown,
   Settings,
+  Gift,
 } from "lucide-react";
 import axios from "axios";
 

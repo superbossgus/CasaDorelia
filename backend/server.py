@@ -425,6 +425,119 @@ class DashboardStats(BaseModel):
     sales_by_cafeteria: List[dict]
     sales_trend: List[dict]
 
+# ============== LOYALTY PROGRAM MODELS ==============
+
+class LoyaltyLevel:
+    BRONZE = "bronce"
+    SILVER = "plata"
+    GOLD = "oro"
+
+# Points configuration
+POINTS_PER_AMOUNT = 10  # $10 MXN = 1 point
+POINTS_EXPIRY_MONTHS = 6
+
+# Level thresholds and multipliers
+LOYALTY_LEVELS = {
+    "bronce": {"name": "Bronce", "min_points": 0, "multiplier": 1.0, "icon": "☕"},
+    "plata": {"name": "Plata", "min_points": 200, "multiplier": 1.25, "icon": "⭐"},
+    "oro": {"name": "Oro", "min_points": 500, "multiplier": 1.5, "icon": "👑", "benefit": "Refill de café americano gratis"}
+}
+
+# Rewards catalog (discounts)
+DEFAULT_REWARDS_CATALOG = [
+    {"points": 50, "discount_percent": 10, "name": "10% de descuento", "max_discount": None},
+    {"points": 100, "discount_percent": 20, "name": "20% de descuento", "max_discount": None},
+    {"points": 150, "discount_percent": 30, "name": "30% de descuento", "max_discount": None},
+    {"points": 200, "discount_percent": 40, "name": "40% de descuento", "max_discount": None},
+    {"points": 250, "discount_percent": 50, "name": "50% de descuento", "max_discount": None},
+    {"points": 300, "discount_percent": 60, "name": "60% de descuento", "max_discount": None},
+    {"points": 350, "discount_percent": 70, "name": "70% de descuento", "max_discount": None},
+    {"points": 400, "discount_percent": 80, "name": "80% de descuento", "max_discount": None},
+    {"points": 450, "discount_percent": 90, "name": "90% de descuento", "max_discount": None},
+    {"points": 500, "discount_percent": 100, "name": "100% de descuento", "max_discount": 200},
+]
+
+class LoyaltyCustomerCreate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    password: str
+    birthday: Optional[str] = None  # ISO date string
+
+class LoyaltyCustomerResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    tenant_id: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    birthday: Optional[str] = None
+    total_points: int = 0
+    lifetime_points: int = 0
+    current_level: str = "bronce"
+    visits_this_month: int = 0
+    created_at: str
+
+class LoyaltyCustomerLogin(BaseModel):
+    email: EmailStr
+    password: str
+    tenant_id: str  # Customer must specify which business they're logging into
+
+class PointTransactionCreate(BaseModel):
+    customer_id: str
+    points: int
+    transaction_type: str  # "earned", "redeemed", "expired", "birthday_bonus"
+    description: Optional[str] = None
+    sale_id: Optional[str] = None
+
+class PointTransactionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    customer_id: str
+    points: int
+    transaction_type: str
+    description: Optional[str] = None
+    sale_id: Optional[str] = None
+    expires_at: Optional[str] = None
+    created_at: str
+
+class RewardResponse(BaseModel):
+    id: str
+    name: str
+    points_required: int
+    discount_percent: int
+    max_discount: Optional[float] = None
+    description: Optional[str] = None
+    is_active: bool = True
+
+class CouponCreate(BaseModel):
+    reward_id: str
+
+class CouponResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    customer_id: str
+    reward_id: str
+    reward_name: str
+    discount_percent: int
+    max_discount: Optional[float] = None
+    code: str
+    status: str  # "active", "used", "expired"
+    expires_at: str
+    created_at: str
+
+class EarnPointsRequest(BaseModel):
+    qr_code: str  # Contains sale_id and tenant_id
+
+class LoyaltyDashboard(BaseModel):
+    customer: LoyaltyCustomerResponse
+    level_info: dict
+    next_level: Optional[dict] = None
+    points_to_next_level: int = 0
+    available_rewards: List[RewardResponse]
+    recent_transactions: List[PointTransactionResponse]
+    active_coupons: List[CouponResponse]
+
 # ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:

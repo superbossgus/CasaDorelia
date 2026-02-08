@@ -193,7 +193,7 @@ const LoyaltyLogin = () => {
 
             <div className="mt-4 text-center">
               <Link 
-                to="/login"
+                to="/admin"
                 className="text-sm text-[#71717A] hover:text-white flex items-center justify-center gap-1"
               >
                 <ArrowLeft className="h-3 w-3" />

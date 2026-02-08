@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-1 de Febrero, 2026
+8 de Febrero, 2026
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días

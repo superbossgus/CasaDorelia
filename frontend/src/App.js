@@ -164,6 +164,17 @@ function App() {
               <Layout><BusinessSettings /></Layout>
             </ProtectedRoute>
           } />
+          
+          <Route path="/loyalty-admin" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><LoyaltyAdmin /></Layout>
+            </ProtectedRoute>
+          } />
+          
+          {/* Loyalty Program Routes (Public for customers) */}
+          <Route path="/loyalty/login" element={<LoyaltyLogin />} />
+          <Route path="/loyalty/register" element={<LoyaltyRegister />} />
+          <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
         </Routes>
         <Toaster 
           position="top-right" 

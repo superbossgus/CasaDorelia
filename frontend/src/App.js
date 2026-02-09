@@ -26,6 +26,7 @@ import LoyaltyAdmin from "./pages/LoyaltyAdmin";
 import LoyaltyLogin from "./pages/LoyaltyLogin";
 import LoyaltyRegister from "./pages/LoyaltyRegister";
 import LoyaltyRewards from "./pages/LoyaltyRewards";
+import SalespeopleAdmin from "./pages/SalespeopleAdmin";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {

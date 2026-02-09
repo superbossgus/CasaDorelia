@@ -35,6 +35,7 @@ import {
   Crown,
   Settings,
   Gift,
+  UserCheck,
 } from "lucide-react";
 import axios from "axios";
 

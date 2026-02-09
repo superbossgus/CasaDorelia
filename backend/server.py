@@ -3861,6 +3861,416 @@ async def get_loyalty_businesses():
     
     return tenants
 
+# ============== SALESPERSON/AFFILIATE ROUTES ==============
+
+def generate_share_code() -> str:
+    """Generate short share code for salesperson"""
+    return secrets.token_hex(4).upper()
+
+def generate_salesperson_qr_data(salesperson_id: str, tenant_id: str, share_code: str) -> str:
+    """Generate QR code data for salesperson"""
+    data = {
+        "type": "salesperson",
+        "salesperson_id": salesperson_id,
+        "tenant_id": tenant_id,
+        "share_code": share_code
+    }
+    return base64.b64encode(json.dumps(data).encode()).decode()
+
+def parse_salesperson_qr_data(qr_code: str) -> dict:
+    """Parse salesperson QR code data"""
+    try:
+        decoded = base64.b64decode(qr_code).decode()
+        data = json.loads(decoded)
+        if data.get("type") != "salesperson":
+            raise ValueError("Invalid QR type")
+        return data
+    except:
+        raise HTTPException(status_code=400, detail="Código QR de vendedor inválido")
+
+@api_router.post("/salespeople", response_model=SalespersonResponse)
+async def create_salesperson(
+    salesperson: SalespersonCreate,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Create a new salesperson with auto-generated QR code"""
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_id = current_user.get("tenant_id", "")
+    
+    # Check if email already exists for this tenant
+    existing = await db.salespeople.find_one({
+        **tenant_filter,
+        "email": salesperson.email
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Este email ya está registrado como vendedor")
+    
+    salesperson_id = str(uuid.uuid4())
+    share_code = generate_share_code()
+    qr_code = generate_salesperson_qr_data(salesperson_id, tenant_id, share_code)
+    
+    salesperson_dict = {
+        "id": salesperson_id,
+        "tenant_id": tenant_id,
+        "name": salesperson.name,
+        "email": salesperson.email,
+        "phone": salesperson.phone,
+        "notes": salesperson.notes,
+        "qr_code": qr_code,
+        "share_code": share_code,
+        "total_sales": 0,
+        "total_commission": 0,
+        "pending_commission": 0,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.salespeople.insert_one(salesperson_dict)
+    logger.info(f"Salesperson created: {salesperson.name} with code {share_code}")
+    
+    return SalespersonResponse(**salesperson_dict)
+
+@api_router.get("/salespeople", response_model=List[SalespersonResponse])
+async def get_salespeople(
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get all salespeople for this tenant"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    salespeople = await db.salespeople.find(
+        tenant_filter,
+        {"_id": 0}
+    ).sort("name", 1).to_list(500)
+    
+    return [SalespersonResponse(**sp) for sp in salespeople]
+
+@api_router.get("/salespeople/{salesperson_id}", response_model=SalespersonResponse)
+async def get_salesperson(
+    salesperson_id: str,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get a specific salesperson"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    salesperson = await db.salespeople.find_one(
+        {**tenant_filter, "id": salesperson_id},
+        {"_id": 0}
+    )
+    
+    if not salesperson:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado")
+    
+    return SalespersonResponse(**salesperson)
+
+@api_router.put("/salespeople/{salesperson_id}")
+async def update_salesperson(
+    salesperson_id: str,
+    salesperson: SalespersonCreate,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Update a salesperson"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    result = await db.salespeople.update_one(
+        {**tenant_filter, "id": salesperson_id},
+        {"$set": {
+            "name": salesperson.name,
+            "email": salesperson.email,
+            "phone": salesperson.phone,
+            "notes": salesperson.notes
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado")
+    
+    return {"message": "Vendedor actualizado"}
+
+@api_router.delete("/salespeople/{salesperson_id}")
+async def deactivate_salesperson(
+    salesperson_id: str,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Deactivate a salesperson (soft delete)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    result = await db.salespeople.update_one(
+        {**tenant_filter, "id": salesperson_id},
+        {"$set": {"is_active": False}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado")
+    
+    return {"message": "Vendedor desactivado"}
+
+@api_router.post("/salespeople/validate-qr")
+async def validate_salesperson_qr(
+    request: ValidateSalespersonQRRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Validate a salesperson QR code (for cashiers)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    try:
+        qr_data = parse_salesperson_qr_data(request.qr_code)
+    except:
+        # Try finding by share code instead
+        salesperson = await db.salespeople.find_one({
+            **tenant_filter,
+            "share_code": request.qr_code.upper(),
+            "is_active": True
+        }, {"_id": 0})
+        
+        if not salesperson:
+            raise HTTPException(status_code=404, detail="Código de vendedor no válido")
+        
+        return {
+            "valid": True,
+            "salesperson_id": salesperson["id"],
+            "salesperson_name": salesperson["name"],
+            "discount_percent": SALESPERSON_DISCOUNT_PERCENT
+        }
+    
+    # Validate QR belongs to this tenant
+    if qr_data.get("tenant_id") != current_user.get("tenant_id", ""):
+        raise HTTPException(status_code=403, detail="Este código no pertenece a tu negocio")
+    
+    # Find salesperson
+    salesperson = await db.salespeople.find_one({
+        **tenant_filter,
+        "id": qr_data["salesperson_id"],
+        "is_active": True
+    }, {"_id": 0})
+    
+    if not salesperson:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado o inactivo")
+    
+    return {
+        "valid": True,
+        "salesperson_id": salesperson["id"],
+        "salesperson_name": salesperson["name"],
+        "discount_percent": SALESPERSON_DISCOUNT_PERCENT
+    }
+
+@api_router.post("/salespeople/apply-discount")
+async def apply_salesperson_discount(
+    request: ApplySalespersonDiscountRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Apply salesperson discount and record commission"""
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_id = current_user.get("tenant_id", "")
+    
+    # Parse QR or find by share code
+    salesperson = None
+    try:
+        qr_data = parse_salesperson_qr_data(request.qr_code)
+        salesperson = await db.salespeople.find_one({
+            **tenant_filter,
+            "id": qr_data["salesperson_id"],
+            "is_active": True
+        }, {"_id": 0})
+    except:
+        salesperson = await db.salespeople.find_one({
+            **tenant_filter,
+            "share_code": request.qr_code.upper(),
+            "is_active": True
+        }, {"_id": 0})
+    
+    if not salesperson:
+        raise HTTPException(status_code=404, detail="Vendedor no válido")
+    
+    # Calculate amounts
+    discount_amount = round(request.sale_total * (SALESPERSON_DISCOUNT_PERCENT / 100), 2)
+    commission_amount = round(request.sale_total * (SALESPERSON_COMMISSION_PERCENT / 100), 2)
+    
+    # Create commission record
+    commission = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "salesperson_id": salesperson["id"],
+        "salesperson_name": salesperson["name"],
+        "sale_id": request.sale_id,
+        "sale_total": request.sale_total,
+        "discount_given": discount_amount,
+        "commission_amount": commission_amount,
+        "status": "pending",
+        "paid_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.commissions.insert_one(commission)
+    
+    # Update salesperson totals
+    await db.salespeople.update_one(
+        {"id": salesperson["id"]},
+        {
+            "$inc": {
+                "total_sales": request.sale_total,
+                "total_commission": commission_amount,
+                "pending_commission": commission_amount
+            }
+        }
+    )
+    
+    logger.info(f"Commission recorded: ${commission_amount} for {salesperson['name']}")
+    
+    return {
+        "discount_applied": discount_amount,
+        "commission_recorded": commission_amount,
+        "salesperson_name": salesperson["name"],
+        "final_total": round(request.sale_total - discount_amount, 2)
+    }
+
+@api_router.get("/salespeople/commissions/all", response_model=List[CommissionResponse])
+async def get_all_commissions(
+    status: Optional[str] = None,
+    salesperson_id: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get all commissions with optional filters"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    query = tenant_filter.copy()
+    if status:
+        query["status"] = status
+    if salesperson_id:
+        query["salesperson_id"] = salesperson_id
+    
+    commissions = await db.commissions.find(
+        query,
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    return [CommissionResponse(**c) for c in commissions]
+
+@api_router.get("/salespeople/commissions/report")
+async def get_commissions_report(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get commission report, optionally filtered by month/year"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    # Build date filter
+    query = tenant_filter.copy()
+    if month and year:
+        start_date = datetime(year, month, 1, tzinfo=timezone.utc)
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        query["created_at"] = {
+            "$gte": start_date.isoformat(),
+            "$lt": end_date.isoformat()
+        }
+    
+    # Aggregate by salesperson
+    salespeople = await db.salespeople.find(tenant_filter, {"_id": 0}).to_list(500)
+    commissions = await db.commissions.find(query, {"_id": 0}).to_list(10000)
+    
+    report = []
+    for sp in salespeople:
+        sp_commissions = [c for c in commissions if c["salesperson_id"] == sp["id"]]
+        total_commission = sum(c["commission_amount"] for c in sp_commissions)
+        pending = sum(c["commission_amount"] for c in sp_commissions if c["status"] == "pending")
+        paid = sum(c["commission_amount"] for c in sp_commissions if c["status"] == "paid")
+        
+        if sp_commissions or not (month and year):  # Include all if no date filter
+            report.append({
+                "salesperson_id": sp["id"],
+                "salesperson_name": sp["name"],
+                "email": sp["email"],
+                "phone": sp.get("phone"),
+                "total_sales": sum(c["sale_total"] for c in sp_commissions),
+                "total_commission": total_commission,
+                "pending_commission": pending,
+                "paid_commission": paid,
+                "sales_count": len(sp_commissions)
+            })
+    
+    # Calculate totals
+    totals = {
+        "total_sales": sum(r["total_sales"] for r in report),
+        "total_commission": sum(r["total_commission"] for r in report),
+        "pending_commission": sum(r["pending_commission"] for r in report),
+        "paid_commission": sum(r["paid_commission"] for r in report),
+        "total_salespeople": len([r for r in report if r["sales_count"] > 0])
+    }
+    
+    return {
+        "report": sorted(report, key=lambda x: x["total_commission"], reverse=True),
+        "totals": totals,
+        "period": f"{month}/{year}" if month and year else "Todo el tiempo"
+    }
+
+@api_router.post("/salespeople/commissions/pay")
+async def pay_commissions(
+    salesperson_id: str,
+    commission_ids: Optional[List[str]] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Mark commissions as paid"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    query = {
+        **tenant_filter,
+        "salesperson_id": salesperson_id,
+        "status": "pending"
+    }
+    
+    if commission_ids:
+        query["id"] = {"$in": commission_ids}
+    
+    # Get pending commissions
+    pending = await db.commissions.find(query, {"_id": 0}).to_list(1000)
+    total_to_pay = sum(c["commission_amount"] for c in pending)
+    
+    if not pending:
+        raise HTTPException(status_code=404, detail="No hay comisiones pendientes")
+    
+    # Mark as paid
+    result = await db.commissions.update_many(
+        query,
+        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    # Update salesperson pending amount
+    await db.salespeople.update_one(
+        {"id": salesperson_id},
+        {"$inc": {"pending_commission": -total_to_pay}}
+    )
+    
+    return {
+        "message": f"Pagadas {result.modified_count} comisiones",
+        "total_paid": total_to_pay
+    }
+
+@api_router.get("/salespeople/{salesperson_id}/qr-image")
+async def get_salesperson_qr_image(
+    salesperson_id: str,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get QR code image URL for salesperson (for sharing)"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    salesperson = await db.salespeople.find_one(
+        {**tenant_filter, "id": salesperson_id},
+        {"_id": 0}
+    )
+    
+    if not salesperson:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado")
+    
+    # Return QR data that can be used with a QR library on frontend
+    return {
+        "qr_data": salesperson["qr_code"],
+        "share_code": salesperson["share_code"],
+        "salesperson_name": salesperson["name"],
+        "discount_percent": SALESPERSON_DISCOUNT_PERCENT
+    }
+
 # ============== SEED DATA ==============
 
 @api_router.post("/seed")

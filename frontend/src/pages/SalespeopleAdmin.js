@@ -160,19 +160,23 @@ const SalespeopleAdmin = () => {
   };
 
   const handleShare = async () => {
-    const shareData = {
-      title: "Descuento Le Pain Doré",
-      text: `¡Usa mi código ${selectedSalesperson?.share_code} para obtener 10% de descuento en Le Pain Doré!`,
-      url: window.location.origin
-    };
+    const shareText = `¡Usa mi código ${selectedSalesperson?.share_code} para obtener 10% de descuento en Le Pain Doré!`;
     
     if (navigator.share) {
       try {
-        await navigator.share(shareData);
+        await navigator.share({
+          title: "Descuento Le Pain Doré",
+          text: shareText,
+          url: window.location.origin
+        });
       } catch (err) {
-        handleCopyCode(selectedSalesperson?.share_code);
+        // User cancelled or share failed, try copy instead
+        if (err.name !== 'AbortError') {
+          handleCopyCode(selectedSalesperson?.share_code);
+        }
       }
     } else {
+      // Fallback: copy the share text
       handleCopyCode(selectedSalesperson?.share_code);
     }
   };

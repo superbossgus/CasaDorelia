@@ -538,6 +538,62 @@ class LoyaltyDashboard(BaseModel):
     recent_transactions: List[PointTransactionResponse]
     active_coupons: List[CouponResponse]
 
+# ============== AFFILIATE/SALESPERSON MODELS ==============
+
+SALESPERSON_DISCOUNT_PERCENT = 10  # Discount for customer
+SALESPERSON_COMMISSION_PERCENT = 10  # Commission for salesperson
+
+class SalespersonCreate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+
+class SalespersonResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    tenant_id: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    qr_code: str
+    share_code: str  # Short code for easy sharing
+    total_sales: float = 0
+    total_commission: float = 0
+    pending_commission: float = 0
+    is_active: bool = True
+    created_at: str
+
+class CommissionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    salesperson_id: str
+    salesperson_name: str
+    sale_id: str
+    sale_total: float
+    discount_given: float
+    commission_amount: float
+    status: str  # "pending", "paid"
+    paid_at: Optional[str] = None
+    created_at: str
+
+class CommissionReportResponse(BaseModel):
+    salesperson_id: str
+    salesperson_name: str
+    total_sales: float
+    total_commission: float
+    pending_commission: float
+    paid_commission: float
+    sales_count: int
+
+class ValidateSalespersonQRRequest(BaseModel):
+    qr_code: str
+
+class ApplySalespersonDiscountRequest(BaseModel):
+    qr_code: str
+    sale_total: float
+    sale_id: str
+
 # ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:

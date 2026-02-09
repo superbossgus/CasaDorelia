@@ -594,6 +594,89 @@ class ApplySalespersonDiscountRequest(BaseModel):
     sale_total: float
     sale_id: str
 
+# ============== PARTNER/INVESTOR MODELS ==============
+
+# Investment configuration
+SHARE_LOT_PRICE = 5000.0  # $5,000 MXN per lot
+SHARE_LOT_PERCENT = 0.1   # 0.1% per lot
+MONTHLY_RETURN_PER_LOT = 150.0  # $150 MXN per lot per month
+TOTAL_PAYMENT_MONTHS = 48  # 4 years
+
+class PartnerCreate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    curp: Optional[str] = None  # Mexican ID
+    address: Optional[str] = None
+    bank_name: str
+    clabe: str  # 18-digit Mexican bank account
+    password: str
+    lots_to_buy: int = 1
+
+class PartnerResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    tenant_id: str
+    name: str
+    email: str
+    phone: str
+    curp: Optional[str] = None
+    address: Optional[str] = None
+    bank_name: str
+    clabe_last4: str  # Only show last 4 digits
+    partner_code: str  # Unique code for sharing
+    qr_code: str
+    total_lots: int = 0
+    total_investment: float = 0
+    participation_percent: float = 0
+    total_returns_paid: float = 0
+    pending_returns: float = 0
+    payments_made: int = 0
+    payments_remaining: int = 48
+    is_active: bool = True
+    created_at: str
+
+class PartnerLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class SharePurchaseResponse(BaseModel):
+    id: str
+    partner_id: str
+    lots: int
+    price_per_lot: float
+    total_amount: float
+    participation_percent: float
+    status: str  # "pending", "completed", "cancelled"
+    stripe_session_id: Optional[str] = None
+    certificate_url: Optional[str] = None
+    created_at: str
+
+class MonthlyReturnResponse(BaseModel):
+    id: str
+    partner_id: str
+    partner_name: str
+    lots: int
+    amount: float
+    month: int  # 1-48
+    status: str  # "pending", "paid"
+    paid_at: Optional[str] = None
+    bank_name: str
+    clabe_last4: str
+    created_at: str
+
+class PartnerDashboard(BaseModel):
+    partner: PartnerResponse
+    purchases: List[SharePurchaseResponse]
+    recent_returns: List[MonthlyReturnResponse]
+    next_payment_date: Optional[str] = None
+    current_lot_price: float
+
+class ShareTransferRequest(BaseModel):
+    lots_to_transfer: int
+    buyer_email: EmailStr
+    transfer_price: float  # Price agreed between parties
+
 # ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:

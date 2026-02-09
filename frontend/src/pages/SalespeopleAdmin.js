@@ -100,8 +100,32 @@ const SalespeopleAdmin = () => {
   };
 
   const handleCopyCode = (code) => {
-    navigator.clipboard.writeText(code);
-    toast.success("Código copiado");
+    // Fallback method for copying text
+    const fallbackCopy = (text) => {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      textArea.style.top = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand("copy");
+        toast.success("Código copiado");
+      } catch (err) {
+        toast.error("No se pudo copiar, copia manualmente: " + text);
+      }
+      document.body.removeChild(textArea);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code)
+        .then(() => toast.success("Código copiado"))
+        .catch(() => fallbackCopy(code));
+    } else {
+      fallbackCopy(code);
+    }
   };
 
   const handleDownloadQR = () => {

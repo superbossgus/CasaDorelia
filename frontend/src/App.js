@@ -183,6 +183,12 @@ function App() {
               <Layout><LoyaltyAdmin /></Layout>
             </ProtectedRoute>
           } />
+          
+          <Route path="/salespeople" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><SalespeopleAdmin /></Layout>
+            </ProtectedRoute>
+          } />
         </Routes>
         <Toaster 
           position="top-right" 

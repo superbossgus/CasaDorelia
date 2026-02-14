@@ -4354,6 +4354,661 @@ async def get_salesperson_qr_image(
         "discount_percent": SALESPERSON_DISCOUNT_PERCENT
     }
 
+# ============== PARTNER/INVESTOR ROUTES ==============
+
+def generate_partner_code() -> str:
+    """Generate unique partner code"""
+    return f"SOCIO-{secrets.token_hex(4).upper()}"
+
+def generate_partner_qr_data(partner_id: str, tenant_id: str, partner_code: str) -> str:
+    """Generate QR code data for partner"""
+    data = {
+        "type": "partner",
+        "partner_id": partner_id,
+        "tenant_id": tenant_id,
+        "partner_code": partner_code
+    }
+    return base64.b64encode(json.dumps(data).encode()).decode()
+
+async def get_current_lot_price(tenant_id: str) -> float:
+    """Get current lot price (can only increase)"""
+    config = await db.partner_config.find_one({"tenant_id": tenant_id}, {"_id": 0})
+    if config:
+        return max(config.get("current_lot_price", SHARE_LOT_PRICE), SHARE_LOT_PRICE)
+    return SHARE_LOT_PRICE
+
+async def update_lot_price(tenant_id: str, new_price: float):
+    """Update lot price (only if higher than current)"""
+    current = await get_current_lot_price(tenant_id)
+    if new_price > current:
+        await db.partner_config.update_one(
+            {"tenant_id": tenant_id},
+            {"$set": {"current_lot_price": new_price, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True
+        )
+
+# Partner Registration (Public)
+@api_router.post("/partners/register")
+async def register_partner(partner: PartnerCreate, tenant_id: str):
+    """Register a new partner/investor"""
+    # Verify tenant exists
+    tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+    
+    # Check if email already registered
+    existing = await db.partners.find_one({"email": partner.email, "tenant_id": tenant_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Este email ya está registrado como socio")
+    
+    # Validate CLABE (18 digits)
+    if len(partner.clabe.replace(" ", "")) != 18:
+        raise HTTPException(status_code=400, detail="La CLABE debe tener 18 dígitos")
+    
+    partner_id = str(uuid.uuid4())
+    partner_code = generate_partner_code()
+    qr_code = generate_partner_qr_data(partner_id, tenant_id, partner_code)
+    
+    # Get current lot price
+    current_price = await get_current_lot_price(tenant_id)
+    
+    partner_dict = {
+        "id": partner_id,
+        "tenant_id": tenant_id,
+        "name": partner.name,
+        "email": partner.email,
+        "phone": partner.phone,
+        "curp": partner.curp,
+        "address": partner.address,
+        "bank_name": partner.bank_name,
+        "clabe": partner.clabe,  # Store full CLABE securely
+        "password": hash_password(partner.password),
+        "partner_code": partner_code,
+        "qr_code": qr_code,
+        "total_lots": 0,
+        "total_investment": 0,
+        "participation_percent": 0,
+        "total_returns_paid": 0,
+        "pending_returns": 0,
+        "payments_made": 0,
+        "payments_remaining": TOTAL_PAYMENT_MONTHS,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.partners.insert_one(partner_dict)
+    
+    # Auto-register as salesperson for referrals
+    salesperson_dict = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "name": partner.name,
+        "email": partner.email,
+        "phone": partner.phone,
+        "notes": f"Socio inversionista - {partner_code}",
+        "qr_code": generate_salesperson_qr_data(str(uuid.uuid4()), tenant_id, partner_code.replace("SOCIO-", "")),
+        "share_code": partner_code.replace("SOCIO-", ""),
+        "total_sales": 0,
+        "total_commission": 0,
+        "pending_commission": 0,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.salespeople.insert_one(salesperson_dict)
+    
+    # Generate token for auto-login
+    token = jwt.encode({
+        "partner_id": partner_id,
+        "email": partner.email,
+        "tenant_id": tenant_id,
+        "type": "partner",
+        "exp": datetime.now(timezone.utc) + timedelta(days=30)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    logger.info(f"Partner registered: {partner.name} - {partner_code}")
+    
+    return {
+        "message": "Registro exitoso como socio",
+        "token": token,
+        "partner_id": partner_id,
+        "partner_code": partner_code,
+        "current_lot_price": current_price,
+        "lots_requested": partner.lots_to_buy
+    }
+
+# Partner Login
+@api_router.post("/partners/login")
+async def login_partner(credentials: PartnerLogin):
+    """Login for partners"""
+    partner = await db.partners.find_one({"email": credentials.email}, {"_id": 0})
+    
+    if not partner or not verify_password(credentials.password, partner["password"]):
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    
+    token = jwt.encode({
+        "partner_id": partner["id"],
+        "email": partner["email"],
+        "tenant_id": partner["tenant_id"],
+        "type": "partner",
+        "exp": datetime.now(timezone.utc) + timedelta(days=30)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    return {
+        "token": token,
+        "partner": {
+            **partner,
+            "clabe_last4": partner["clabe"][-4:],
+            "clabe": None,
+            "password": None
+        }
+    }
+
+# Auth dependency for partners
+async def get_current_partner(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "partner":
+            raise HTTPException(status_code=401, detail="Token inválido para socio")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expirado")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+# Get partner dashboard
+@api_router.get("/partners/dashboard")
+async def get_partner_dashboard(partner_data: dict = Depends(get_current_partner)):
+    """Get partner dashboard with all their investment info"""
+    partner = await db.partners.find_one(
+        {"id": partner_data["partner_id"]},
+        {"_id": 0, "password": 0}
+    )
+    if not partner:
+        raise HTTPException(status_code=404, detail="Socio no encontrado")
+    
+    # Get current lot price
+    current_price = await get_current_lot_price(partner["tenant_id"])
+    
+    # Get purchases
+    purchases = await db.share_purchases.find(
+        {"partner_id": partner["id"], "status": "completed"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    
+    # Get recent returns
+    returns = await db.monthly_returns.find(
+        {"partner_id": partner["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).limit(12).to_list(12)
+    
+    # Calculate next payment date (1st of next month)
+    today = datetime.now(timezone.utc)
+    if today.month == 12:
+        next_payment = datetime(today.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        next_payment = datetime(today.year, today.month + 1, 1, tzinfo=timezone.utc)
+    
+    # Calculate current value of investment
+    current_value = partner["total_lots"] * current_price
+    
+    return {
+        "partner": {
+            **partner,
+            "clabe_last4": partner["clabe"][-4:],
+            "clabe": None,
+            "current_value": current_value
+        },
+        "purchases": purchases,
+        "recent_returns": returns,
+        "next_payment_date": next_payment.isoformat(),
+        "current_lot_price": current_price,
+        "monthly_return_per_lot": MONTHLY_RETURN_PER_LOT,
+        "total_payment_months": TOTAL_PAYMENT_MONTHS
+    }
+
+# Create checkout session for buying lots
+@api_router.post("/partners/buy-lots")
+async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_current_partner)):
+    """Create Stripe checkout session for buying lots"""
+    if lots < 1:
+        raise HTTPException(status_code=400, detail="Debe comprar al menos 1 lote")
+    
+    partner = await db.partners.find_one({"id": partner_data["partner_id"]}, {"_id": 0})
+    if not partner:
+        raise HTTPException(status_code=404, detail="Socio no encontrado")
+    
+    tenant = await db.tenants.find_one({"id": partner["tenant_id"]}, {"_id": 0})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+    
+    current_price = await get_current_lot_price(partner["tenant_id"])
+    total_amount = lots * current_price
+    participation = lots * SHARE_LOT_PERCENT
+    
+    # Create purchase record
+    purchase_id = str(uuid.uuid4())
+    purchase = {
+        "id": purchase_id,
+        "partner_id": partner["id"],
+        "tenant_id": partner["tenant_id"],
+        "lots": lots,
+        "price_per_lot": current_price,
+        "total_amount": total_amount,
+        "participation_percent": participation,
+        "status": "pending",
+        "stripe_session_id": None,
+        "certificate_url": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.share_purchases.insert_one(purchase)
+    
+    # Create Stripe checkout
+    try:
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY)
+        
+        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+        
+        checkout_request = CheckoutSessionRequest(
+            success_url=f"{frontend_url}/socios/compra-exitosa?purchase_id={purchase_id}",
+            cancel_url=f"{frontend_url}/socios/dashboard",
+            line_items=[{
+                "price_data": {
+                    "currency": "mxn",
+                    "unit_amount": int(current_price * 100),  # In cents
+                    "product_data": {
+                        "name": f"Participación Doré - {lots} Lote(s)",
+                        "description": f"{participation}% de participación en {tenant.get('business_name', 'Doré')}. Rendimiento: ${MONTHLY_RETURN_PER_LOT * lots}/mes durante {TOTAL_PAYMENT_MONTHS} meses."
+                    }
+                },
+                "quantity": lots
+            }],
+            mode="payment",
+            customer_email=partner["email"],
+            metadata={
+                "purchase_id": purchase_id,
+                "partner_id": partner["id"],
+                "lots": str(lots),
+                "type": "partner_investment"
+            }
+        )
+        
+        session = stripe_checkout.create_checkout_session(checkout_request)
+        
+        # Update purchase with session ID
+        await db.share_purchases.update_one(
+            {"id": purchase_id},
+            {"$set": {"stripe_session_id": session.session_id}}
+        )
+        
+        return {
+            "checkout_url": session.checkout_url,
+            "purchase_id": purchase_id,
+            "lots": lots,
+            "total_amount": total_amount,
+            "participation_percent": participation
+        }
+        
+    except Exception as e:
+        logger.error(f"Stripe checkout error: {str(e)}")
+        await db.share_purchases.update_one({"id": purchase_id}, {"$set": {"status": "failed"}})
+        raise HTTPException(status_code=500, detail="Error al procesar el pago")
+
+# Webhook for completed purchases
+@api_router.post("/partners/webhook")
+async def partner_payment_webhook(request: Request):
+    """Handle Stripe webhook for partner payments"""
+    try:
+        payload = await request.body()
+        sig_header = request.headers.get("stripe-signature")
+        
+        # For simplicity, process the event directly
+        event_data = json.loads(payload)
+        
+        if event_data.get("type") == "checkout.session.completed":
+            session = event_data["data"]["object"]
+            metadata = session.get("metadata", {})
+            
+            if metadata.get("type") == "partner_investment":
+                purchase_id = metadata.get("purchase_id")
+                partner_id = metadata.get("partner_id")
+                lots = int(metadata.get("lots", 0))
+                
+                # Update purchase status
+                purchase = await db.share_purchases.find_one({"id": purchase_id}, {"_id": 0})
+                if purchase and purchase["status"] == "pending":
+                    await db.share_purchases.update_one(
+                        {"id": purchase_id},
+                        {"$set": {"status": "completed"}}
+                    )
+                    
+                    # Update partner totals
+                    await db.partners.update_one(
+                        {"id": partner_id},
+                        {
+                            "$inc": {
+                                "total_lots": lots,
+                                "total_investment": purchase["total_amount"],
+                                "participation_percent": purchase["participation_percent"]
+                            }
+                        }
+                    )
+                    
+                    logger.info(f"Partner investment completed: {partner_id}, {lots} lots")
+        
+        return {"status": "success"}
+        
+    except Exception as e:
+        logger.error(f"Partner webhook error: {str(e)}")
+        return {"status": "error"}
+
+# Manual confirmation of purchase (for admin)
+@api_router.post("/partners/confirm-purchase/{purchase_id}")
+async def confirm_partner_purchase(
+    purchase_id: str,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Manually confirm a partner purchase"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    purchase = await db.share_purchases.find_one(
+        {**tenant_filter, "id": purchase_id},
+        {"_id": 0}
+    )
+    
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    
+    if purchase["status"] == "completed":
+        raise HTTPException(status_code=400, detail="Esta compra ya fue confirmada")
+    
+    # Update purchase
+    await db.share_purchases.update_one(
+        {"id": purchase_id},
+        {"$set": {"status": "completed"}}
+    )
+    
+    # Update partner totals
+    await db.partners.update_one(
+        {"id": purchase["partner_id"]},
+        {
+            "$inc": {
+                "total_lots": purchase["lots"],
+                "total_investment": purchase["total_amount"],
+                "participation_percent": purchase["participation_percent"]
+            }
+        }
+    )
+    
+    # Schedule monthly returns for this purchase
+    partner = await db.partners.find_one({"id": purchase["partner_id"]}, {"_id": 0})
+    
+    return {
+        "message": f"Compra confirmada: {purchase['lots']} lotes para {partner['name']}",
+        "lots": purchase["lots"],
+        "participation_percent": purchase["participation_percent"]
+    }
+
+# Get all partners (Admin)
+@api_router.get("/partners/admin/all")
+async def get_all_partners(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get all partners for this tenant"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    partners = await db.partners.find(
+        tenant_filter,
+        {"_id": 0, "password": 0}
+    ).sort("created_at", -1).to_list(500)
+    
+    # Mask CLABE
+    for p in partners:
+        p["clabe_last4"] = p["clabe"][-4:]
+        p["clabe"] = f"************{p['clabe'][-4:]}"
+    
+    return partners
+
+# Get partner stats (Admin)
+@api_router.get("/partners/admin/stats")
+async def get_partner_stats(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get partner program statistics"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    partners = await db.partners.find(tenant_filter, {"_id": 0}).to_list(500)
+    purchases = await db.share_purchases.find({**tenant_filter, "status": "completed"}, {"_id": 0}).to_list(1000)
+    returns = await db.monthly_returns.find(tenant_filter, {"_id": 0}).to_list(10000)
+    
+    total_investment = sum(p["total_investment"] for p in partners)
+    total_lots = sum(p["total_lots"] for p in partners)
+    total_participation = sum(p["participation_percent"] for p in partners)
+    
+    pending_returns = sum(r["amount"] for r in returns if r["status"] == "pending")
+    paid_returns = sum(r["amount"] for r in returns if r["status"] == "paid")
+    
+    current_price = await get_current_lot_price(current_user.get("tenant_id", ""))
+    
+    return {
+        "total_partners": len(partners),
+        "active_partners": len([p for p in partners if p["total_lots"] > 0]),
+        "total_lots_sold": total_lots,
+        "total_investment": total_investment,
+        "total_participation_percent": total_participation,
+        "available_participation": 100 - total_participation,
+        "pending_returns": pending_returns,
+        "paid_returns": paid_returns,
+        "total_returns_due": total_lots * MONTHLY_RETURN_PER_LOT,
+        "current_lot_price": current_price
+    }
+
+# Generate monthly returns report
+@api_router.post("/partners/admin/generate-returns")
+async def generate_monthly_returns(
+    month: int,
+    year: int,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Generate monthly returns for all active partners"""
+    tenant_filter = get_tenant_filter(current_user)
+    tenant_id = current_user.get("tenant_id", "")
+    
+    # Check if already generated
+    existing = await db.monthly_returns.find_one({
+        **tenant_filter,
+        "month_year": f"{month}/{year}"
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Los rendimientos de {month}/{year} ya fueron generados")
+    
+    # Get all partners with lots
+    partners = await db.partners.find(
+        {**tenant_filter, "total_lots": {"$gt": 0}},
+        {"_id": 0}
+    ).to_list(500)
+    
+    returns_created = []
+    for partner in partners:
+        # Check if partner still has payments remaining
+        if partner.get("payments_made", 0) >= TOTAL_PAYMENT_MONTHS:
+            continue
+        
+        return_amount = partner["total_lots"] * MONTHLY_RETURN_PER_LOT
+        
+        return_record = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": tenant_id,
+            "partner_id": partner["id"],
+            "partner_name": partner["name"],
+            "lots": partner["total_lots"],
+            "amount": return_amount,
+            "month_year": f"{month}/{year}",
+            "payment_number": partner.get("payments_made", 0) + 1,
+            "status": "pending",
+            "paid_at": None,
+            "bank_name": partner["bank_name"],
+            "clabe": partner["clabe"],
+            "clabe_last4": partner["clabe"][-4:],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        await db.monthly_returns.insert_one(return_record)
+        returns_created.append(return_record)
+    
+    total_amount = sum(r["amount"] for r in returns_created)
+    
+    return {
+        "message": f"Rendimientos generados para {month}/{year}",
+        "partners_count": len(returns_created),
+        "total_amount": total_amount,
+        "returns": returns_created
+    }
+
+# Get pending returns (Admin)
+@api_router.get("/partners/admin/pending-returns")
+async def get_pending_returns(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get all pending monthly returns"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    returns = await db.monthly_returns.find(
+        {**tenant_filter, "status": "pending"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    
+    # Mask CLABE in response
+    for r in returns:
+        r["clabe"] = f"************{r['clabe_last4']}"
+    
+    total_pending = sum(r["amount"] for r in returns)
+    
+    return {
+        "returns": returns,
+        "total_pending": total_pending,
+        "count": len(returns)
+    }
+
+# Mark returns as paid
+@api_router.post("/partners/admin/pay-returns")
+async def pay_partner_returns(
+    return_ids: List[str],
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Mark monthly returns as paid"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    paid_count = 0
+    total_paid = 0
+    
+    for return_id in return_ids:
+        ret = await db.monthly_returns.find_one(
+            {**tenant_filter, "id": return_id, "status": "pending"},
+            {"_id": 0}
+        )
+        
+        if ret:
+            # Mark as paid
+            await db.monthly_returns.update_one(
+                {"id": return_id},
+                {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            
+            # Update partner stats
+            await db.partners.update_one(
+                {"id": ret["partner_id"]},
+                {
+                    "$inc": {
+                        "total_returns_paid": ret["amount"],
+                        "payments_made": 1,
+                        "payments_remaining": -1
+                    }
+                }
+            )
+            
+            paid_count += 1
+            total_paid += ret["amount"]
+    
+    return {
+        "message": f"Pagados {paid_count} rendimientos",
+        "total_paid": total_paid
+    }
+
+# Update lot price (Admin)
+@api_router.post("/partners/admin/update-price")
+async def update_partner_lot_price(
+    new_price: float,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Update lot price (can only increase)"""
+    tenant_id = current_user.get("tenant_id", "")
+    current_price = await get_current_lot_price(tenant_id)
+    
+    if new_price < SHARE_LOT_PRICE:
+        raise HTTPException(status_code=400, detail=f"El precio mínimo es ${SHARE_LOT_PRICE}")
+    
+    if new_price <= current_price:
+        raise HTTPException(status_code=400, detail=f"El nuevo precio debe ser mayor a ${current_price}")
+    
+    await update_lot_price(tenant_id, new_price)
+    
+    return {
+        "message": f"Precio actualizado de ${current_price} a ${new_price}",
+        "old_price": current_price,
+        "new_price": new_price
+    }
+
+# Get partner certificate data
+@api_router.get("/partners/certificate/{purchase_id}")
+async def get_partner_certificate(
+    purchase_id: str,
+    partner_data: dict = Depends(get_current_partner)
+):
+    """Get certificate data for a purchase"""
+    purchase = await db.share_purchases.find_one(
+        {"id": purchase_id, "partner_id": partner_data["partner_id"], "status": "completed"},
+        {"_id": 0}
+    )
+    
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    
+    partner = await db.partners.find_one({"id": partner_data["partner_id"]}, {"_id": 0})
+    tenant = await db.tenants.find_one({"id": partner["tenant_id"]}, {"_id": 0})
+    
+    return {
+        "certificate": {
+            "partner_name": partner["name"],
+            "partner_code": partner["partner_code"],
+            "business_name": tenant.get("business_name", "Doré"),
+            "lots": purchase["lots"],
+            "participation_percent": purchase["participation_percent"],
+            "total_investment": purchase["total_amount"],
+            "price_per_lot": purchase["price_per_lot"],
+            "monthly_return": purchase["lots"] * MONTHLY_RETURN_PER_LOT,
+            "total_months": TOTAL_PAYMENT_MONTHS,
+            "total_return": purchase["lots"] * MONTHLY_RETURN_PER_LOT * TOTAL_PAYMENT_MONTHS,
+            "purchase_date": purchase["created_at"],
+            "qr_code": partner["qr_code"]
+        }
+    }
+
+# Get list of businesses with partner program (Public)
+@api_router.get("/partners/businesses")
+async def get_partner_businesses():
+    """Get businesses with active partner programs"""
+    tenants = await db.tenants.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "business_name": 1, "logo_url": 1}
+    ).to_list(100)
+    
+    result = []
+    for t in tenants:
+        price = await get_current_lot_price(t["id"])
+        result.append({
+            **t,
+            "current_lot_price": price,
+            "min_investment": SHARE_LOT_PRICE,
+            "participation_per_lot": SHARE_LOT_PERCENT,
+            "monthly_return_per_lot": MONTHLY_RETURN_PER_LOT
+        })
+    
+    return result
+
 # ============== SEED DATA ==============
 
 @api_router.post("/seed")

@@ -4568,8 +4568,8 @@ async def get_partner_dashboard(partner_data: dict = Depends(get_current_partner
 
 # Create checkout session for buying lots
 @api_router.post("/partners/buy-lots")
-async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_current_partner)):
-    """Create Stripe checkout session for buying lots"""
+async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: dict = Depends(get_current_partner)):
+    """Create purchase for buying lots with different payment methods"""
     if lots < 1:
         raise HTTPException(status_code=400, detail="Debe comprar al menos 1 lote")
     
@@ -4595,12 +4595,25 @@ async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_curren
         "price_per_lot": current_price,
         "total_amount": total_amount,
         "participation_percent": participation,
-        "status": "pending",
+        "payment_method": method,
+        "status": "pending" if method in ["spei", "paypal"] else "pending",
         "stripe_session_id": None,
+        "receipt_url": None,
         "certificate_url": None,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.share_purchases.insert_one(purchase)
+    
+    # For SPEI and PayPal, just return success - user will upload receipt
+    if method in ["spei", "paypal"]:
+        return {
+            "purchase_id": purchase_id,
+            "lots": lots,
+            "total_amount": total_amount,
+            "participation_percent": participation,
+            "payment_method": method,
+            "message": "Compra registrada. Sube tu comprobante de pago."
+        }
     
     # Create Stripe checkout
     try:

@@ -105,6 +105,7 @@ const Layout = ({ children }) => {
     { path: "/reports", label: "Reportes", icon: FileText, roles: ["admin", "gerente"] },
     { path: "/loyalty-admin", label: "Programa Lealtad", icon: Gift, roles: ["admin"] },
     { path: "/salespeople", label: "Vendedores", icon: UserCheck, roles: ["admin"] },
+    { path: "/partners-admin", label: "Socios Inversionistas", icon: TrendingUp, roles: ["admin"] },
     { path: "/cafeterias", label: "Cafeterías", icon: Store, roles: ["admin"] },
     { path: "/users", label: "Usuarios", icon: Users, roles: ["admin"] },
     { path: "/whatsapp-alerts", label: "Alertas WhatsApp", icon: MessageCircle, roles: ["admin"] },

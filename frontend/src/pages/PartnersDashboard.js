@@ -226,9 +226,9 @@ const PartnersDashboard = () => {
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <img 
-                src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+                src={DORE_LOGO_WHITE}
                 alt="Doré" 
-                className="h-10 w-auto"
+                className="h-10 w-auto brightness-0 invert"
               />
               <div>
                 <p className="text-[#A1A1AA] text-sm">Portal de Socios</p>

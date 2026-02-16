@@ -4632,7 +4632,7 @@ async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_curren
         )
         
         return {
-            "checkout_url": session.checkout_url,
+            "checkout_url": session.url,
             "purchase_id": purchase_id,
             "lots": lots,
             "total_amount": total_amount,

@@ -4609,26 +4609,17 @@ async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_curren
         frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
         
         checkout_request = CheckoutSessionRequest(
-            success_url=f"{frontend_url}/socios/compra-exitosa?purchase_id={purchase_id}",
+            amount=total_amount,
+            currency="mxn",
+            quantity=1,
+            success_url=f"{frontend_url}/socios/success?purchase_id={purchase_id}",
             cancel_url=f"{frontend_url}/socios/dashboard",
-            line_items=[{
-                "price_data": {
-                    "currency": "mxn",
-                    "unit_amount": int(current_price * 100),  # In cents
-                    "product_data": {
-                        "name": f"Participación Doré - {lots} Lote(s)",
-                        "description": f"{participation}% de participación en {tenant.get('business_name', 'Doré')}. Rendimiento: ${MONTHLY_RETURN_PER_LOT * lots}/mes durante {TOTAL_PAYMENT_MONTHS} meses."
-                    }
-                },
-                "quantity": lots
-            }],
-            mode="payment",
-            customer_email=partner["email"],
             metadata={
                 "purchase_id": purchase_id,
                 "partner_id": partner["id"],
                 "lots": str(lots),
-                "type": "partner_investment"
+                "type": "partner_investment",
+                "description": f"Participación Doré - {lots} Lote(s) - {participation}%"
             }
         )
         

@@ -348,7 +348,7 @@ const PartnersAdmin = () => {
                           {partner.total_lots}
                         </td>
                         <td className="py-4 px-4 text-right text-[#708238] font-bold">
-                          {partner.participation_percent.toFixed(1)}%
+                          {partner.participation_percent.toFixed(2)}%
                         </td>
                         <td className="py-4 px-4 text-right text-white">
                           {formatCurrency(partner.total_investment)}

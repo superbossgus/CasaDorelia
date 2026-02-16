@@ -36,6 +36,7 @@ import {
   Settings,
   Gift,
   UserCheck,
+  TrendingUp,
 } from "lucide-react";
 import axios from "axios";
 

@@ -318,49 +318,110 @@ const PartnersRegister = () => {
 
               {/* Bank Info */}
               <div className="pt-4 border-t border-[#27272A]">
-                <h3 className="text-white font-bold mb-4">Datos Bancarios para Depósitos</h3>
+                <h3 className="text-white font-bold mb-4">¿Cómo deseas recibir tus rendimientos?</h3>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-[#EDEDED]">Banco *</Label>
-                    <Select 
-                      value={formData.bank_name} 
-                      onValueChange={(v) => setFormData({...formData, bank_name: v})}
-                    >
-                      <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
-                        <SelectValue placeholder="Selecciona tu banco" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#161616] border-[#27272A] max-h-60">
-                        {BANKS.map((bank) => (
-                          <SelectItem 
-                            key={bank} 
-                            value={bank}
-                            className="text-white hover:bg-[#27272A]"
-                          >
-                            {bank}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                {/* Payment Method Selection */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("bank")}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      paymentMethod === "bank"
+                        ? "border-[#708238] bg-[#708238]/10"
+                        : "border-[#27272A] bg-[#0D0D0D] hover:border-[#52525B]"
+                    }`}
+                  >
+                    <Building className={`h-6 w-6 mx-auto mb-2 ${paymentMethod === "bank" ? "text-[#708238]" : "text-[#A1A1AA]"}`} />
+                    <p className={`text-sm font-medium ${paymentMethod === "bank" ? "text-white" : "text-[#A1A1AA]"}`}>
+                      Cuenta Bancaria
+                    </p>
+                    <p className="text-xs text-[#71717A]">CLABE Interbancaria</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("paypal")}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      paymentMethod === "paypal"
+                        ? "border-[#0070ba] bg-[#0070ba]/10"
+                        : "border-[#27272A] bg-[#0D0D0D] hover:border-[#52525B]"
+                    }`}
+                  >
+                    <div className={`h-6 mx-auto mb-2 flex items-center justify-center ${paymentMethod === "paypal" ? "text-[#0070ba]" : "text-[#A1A1AA]"}`}>
+                      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor">
+                        <path d="M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 6.797-8.647 6.797h-2.19c-.524 0-.968.382-1.05.9l-1.12 7.106zm14.146-14.42a3.35 3.35 0 0 0-.607-.541c-.013.076-.026.175-.041.254-.93 4.778-4.005 7.201-9.138 7.201h-2.19a.563.563 0 0 0-.556.479l-1.187 7.527-.336 2.131a.32.32 0 0 0 .317.37h4.103a.505.505 0 0 0 .499-.426l.02-.106.396-2.513.026-.14a.505.505 0 0 1 .499-.426h.315c4.036 0 7.19-1.64 8.116-6.378.387-1.976.186-3.632-.836-4.432z"/>
+                      </svg>
+                    </div>
+                    <p className={`text-sm font-medium ${paymentMethod === "paypal" ? "text-white" : "text-[#A1A1AA]"}`}>
+                      PayPal
+                    </p>
+                    <p className="text-xs text-[#71717A]">Correo de PayPal</p>
+                  </button>
+                </div>
+                
+                {/* Bank Fields */}
+                {paymentMethod === "bank" && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-[#EDEDED]">Banco *</Label>
+                      <Select 
+                        value={formData.bank_name} 
+                        onValueChange={(v) => setFormData({...formData, bank_name: v})}
+                      >
+                        <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
+                          <SelectValue placeholder="Selecciona tu banco" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#161616] border-[#27272A] max-h-60">
+                          {BANKS.map((bank) => (
+                            <SelectItem 
+                              key={bank} 
+                              value={bank}
+                              className="text-white hover:bg-[#27272A]"
+                            >
+                              {bank}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
+                    <div className="space-y-2">
+                      <Label className="text-[#EDEDED]">CLABE Interbancaria *</Label>
+                      <div className="relative">
+                        <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#52525B]" />
+                        <Input
+                          name="clabe"
+                          value={formData.clabe}
+                          onChange={handleChange}
+                          placeholder="18 dígitos"
+                          maxLength={18}
+                          className="bg-[#0D0D0D] border-[#27272A] text-white pl-10 font-mono"
+                        />
+                      </div>
+                      <p className="text-xs text-[#71717A]">{formData.clabe.length}/18 dígitos</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* PayPal Fields */}
+                {paymentMethod === "paypal" && (
                   <div className="space-y-2">
-                    <Label className="text-[#EDEDED]">CLABE Interbancaria *</Label>
+                    <Label className="text-[#EDEDED]">Correo de PayPal *</Label>
                     <div className="relative">
-                      <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#52525B]" />
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#0070ba]" />
                       <Input
-                        name="clabe"
-                        value={formData.clabe}
+                        name="paypal_email"
+                        type="email"
+                        value={formData.paypal_email}
                         onChange={handleChange}
-                        required
-                        placeholder="18 dígitos"
-                        maxLength={18}
-                        className="bg-[#0D0D0D] border-[#27272A] text-white pl-10 font-mono"
+                        placeholder="tu@correo-paypal.com"
+                        className="bg-[#0D0D0D] border-[#27272A] text-white pl-10"
                       />
                     </div>
-                    <p className="text-xs text-[#71717A]">{formData.clabe.length}/18 dígitos</p>
+                    <p className="text-xs text-[#71717A]">
+                      A este correo recibirás tus rendimientos mensuales vía PayPal
+                    </p>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Password */}

@@ -73,19 +73,90 @@ const PartnersDashboard = () => {
     }
   };
 
-  const handleBuyLots = async (lots) => {
+  const handleBuyLots = async (lots, method = "stripe") => {
     setBuying(true);
     try {
       const response = await axios.post(
-        `${API}/api/partners/buy-lots?lots=${lots}`,
+        `${API}/api/partners/buy-lots?lots=${lots}&method=${method}`,
         {},
         { headers: { Authorization: `Bearer ${partnerToken}` } }
       );
-      window.location.href = response.data.checkout_url;
+      if (method === "stripe") {
+        window.location.href = response.data.checkout_url;
+      } else {
+        // For SPEI/PayPal, show instructions and purchase was created
+        toast.success("Compra registrada. Realiza el pago y sube tu comprobante.");
+        setShowPaymentModal(false);
+        fetchDashboard();
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || "Error al procesar compra");
       setBuying(false);
     }
+  };
+
+  const openPaymentModal = (lots) => {
+    setSelectedLots(lots);
+    setPaymentStep("select");
+    setShowPaymentModal(true);
+    setReceiptFile(null);
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error("El archivo es demasiado grande (máx 10MB)");
+        return;
+      }
+      setReceiptFile(file);
+    }
+  };
+
+  const handleUploadReceipt = async () => {
+    if (!receiptFile) {
+      toast.error("Selecciona un archivo");
+      return;
+    }
+
+    setUploadingReceipt(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", receiptFile);
+      formData.append("lots", selectedLots);
+      formData.append("payment_method", paymentStep === "spei" ? "spei" : "paypal");
+
+      await axios.post(`${API}/api/partners/upload-receipt`, formData, {
+        headers: {
+          Authorization: `Bearer ${partnerToken}`,
+          "Content-Type": "multipart/form-data"
+        }
+      });
+
+      toast.success("¡Comprobante subido! Tu compra será verificada pronto.");
+      setShowPaymentModal(false);
+      setReceiptFile(null);
+      fetchDashboard();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Error al subir comprobante");
+    } finally {
+      setUploadingReceipt(false);
+    }
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      toast.success("Copiado al portapapeles");
+    }).catch(() => {
+      // Fallback
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      toast.success("Copiado al portapapeles");
+    });
   };
 
   const handleLogout = () => {

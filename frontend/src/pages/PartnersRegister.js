@@ -24,8 +24,8 @@ const PartnersRegister = () => {
   const navigate = useNavigate();
   const [businesses, setBusinesses] = useState([]);
   const [selectedBusiness, setSelectedBusiness] = useState("");
-  const [currentPrice, setCurrentPrice] = useState(5000);
-  const [lotsToBy, setLotsToBuy] = useState(1);
+  const [currentPrice, setCurrentPrice] = useState(4000);
+  const [lotsToBuy, setLotsToBuy] = useState(1);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -129,8 +129,8 @@ const PartnersRegister = () => {
   };
 
   const totalInvestment = lotsToBuy * currentPrice;
-  const participation = lotsToBuy * 0.1;
-  const monthlyReturn = lotsToBuy * 150;
+  const participation = lotsToBuy * 0.05;
+  const monthlyReturn = lotsToBuy * 100;
   const totalReturn = monthlyReturn * 48;
 
   return (

@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-8 de Febrero, 2026
+16 de Febrero, 2026
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -120,6 +120,35 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Expiración de Puntos**: 6 meses de vigencia
 - ✅ **Bono de Bienvenida**: 10 puntos al registrarse
 
+### Sistema de Vendedores/Afiliados (8-Feb-2026)
+- ✅ **Registro de Vendedores**: Alta desde panel admin
+- ✅ **Códigos QR únicos**: Para tracking de referidos
+- ✅ **Descuentos automáticos**: 10% para clientes referidos
+- ✅ **Sistema de Comisiones**: 10% de las ventas referidas
+- ✅ **Panel Admin**: Gestión de vendedores y comisiones
+
+### Módulo de Socios/Inversionistas (16-Feb-2026)
+- ✅ **Landing Page** (`/socios`): Información del programa de inversión
+- ✅ **Registro de Socios** (`/socios/registro`): Con auto-registro como vendedor
+- ✅ **Login de Socios** (`/socios/login`): Autenticación separada
+- ✅ **Dashboard de Socio** (`/socios/dashboard`):
+  - Resumen de inversión (lotes, participación, rendimientos)
+  - Código QR para descuentos/comisiones
+  - Historial de compras
+  - Historial de pagos
+  - Botón para comprar más lotes
+- ✅ **Compra de Lotes vía Stripe**:
+  - Precio por lote: $4,000 MXN
+  - Participación: 0.05% por lote
+  - Rendimiento: $100 MXN mensual por lote
+  - Duración: 48 meses de pagos
+- ✅ **Panel Admin** (`/partners-admin`):
+  - Lista de socios con búsqueda
+  - Estadísticas globales
+  - Generación de rendimientos mensuales
+  - Marcado de pagos realizados
+  - Actualización de precio de lote
+
 ### Integración Clip POS
 - ⚠️ **MOCK**: Endpoints preparados para integración real
 - Requiere credenciales de developer.clip.mx para activación
@@ -188,6 +217,18 @@ El seed data genera:
 - `POST /api/whatsapp/send-alerts` - Enviar alertas de stock crítico
 - `GET /api/reports/sales-comparison` - Comparativa ventas
 - `GET /api/reports/profit-analysis` - Análisis de utilidad
+
+### Endpoints de Socios/Inversionistas
+- `GET /api/partners/businesses` - Listar negocios disponibles
+- `POST /api/partners/register` - Registro de nuevo socio
+- `POST /api/partners/login` - Login de socio
+- `GET /api/partners/dashboard` - Dashboard del socio
+- `POST /api/partners/buy-lots` - Comprar lotes (Stripe checkout)
+- `GET /api/partners/admin/all` - Listar todos los socios (admin)
+- `GET /api/partners/admin/stats` - Estadísticas de socios (admin)
+- `GET /api/partners/admin/pending-returns` - Rendimientos pendientes (admin)
+- `POST /api/partners/admin/generate-returns` - Generar rendimientos mensuales
+- `POST /api/partners/admin/mark-paid` - Marcar rendimiento como pagado
 
 ## Estructura de Archivos
 ```

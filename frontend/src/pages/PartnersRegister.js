@@ -125,8 +125,10 @@ const PartnersRegister = () => {
         phone: formData.phone,
         curp: formData.curp || null,
         address: formData.address || null,
-        bank_name: formData.bank_name,
-        clabe: formData.clabe,
+        payment_method: paymentMethod,
+        bank_name: paymentMethod === "bank" ? formData.bank_name : null,
+        clabe: paymentMethod === "bank" ? formData.clabe : null,
+        paypal_email: paymentMethod === "paypal" ? formData.paypal_email : null,
         password: formData.password,
         lots_to_buy: lotsToBuy
       });

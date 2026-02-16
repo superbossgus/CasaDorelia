@@ -99,9 +99,21 @@ const PartnersRegister = () => {
       return;
     }
 
-    if (formData.clabe.length !== 18) {
-      toast.error("La CLABE debe tener 18 dígitos");
-      return;
+    // Validate payment receiving method
+    if (paymentMethod === "bank") {
+      if (formData.clabe.length !== 18) {
+        toast.error("La CLABE debe tener 18 dígitos");
+        return;
+      }
+      if (!formData.bank_name) {
+        toast.error("Selecciona tu banco");
+        return;
+      }
+    } else if (paymentMethod === "paypal") {
+      if (!formData.paypal_email || !formData.paypal_email.includes("@")) {
+        toast.error("Ingresa un correo de PayPal válido");
+        return;
+      }
     }
 
     setIsLoading(true);

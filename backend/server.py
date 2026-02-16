@@ -4403,9 +4403,15 @@ async def register_partner(partner: PartnerCreate, tenant_id: str):
     if existing:
         raise HTTPException(status_code=400, detail="Este email ya está registrado como socio")
     
-    # Validate CLABE (18 digits)
-    if len(partner.clabe.replace(" ", "")) != 18:
-        raise HTTPException(status_code=400, detail="La CLABE debe tener 18 dígitos")
+    # Validate payment receiving method
+    if partner.payment_method == "bank":
+        if not partner.clabe or len(partner.clabe.replace(" ", "")) != 18:
+            raise HTTPException(status_code=400, detail="La CLABE debe tener 18 dígitos")
+        if not partner.bank_name:
+            raise HTTPException(status_code=400, detail="Selecciona tu banco")
+    elif partner.payment_method == "paypal":
+        if not partner.paypal_email or "@" not in partner.paypal_email:
+            raise HTTPException(status_code=400, detail="Ingresa un correo de PayPal válido")
     
     partner_id = str(uuid.uuid4())
     partner_code = generate_partner_code()
@@ -4422,8 +4428,10 @@ async def register_partner(partner: PartnerCreate, tenant_id: str):
         "phone": partner.phone,
         "curp": partner.curp,
         "address": partner.address,
-        "bank_name": partner.bank_name,
-        "clabe": partner.clabe,  # Store full CLABE securely
+        "payment_method": partner.payment_method,
+        "bank_name": partner.bank_name if partner.payment_method == "bank" else None,
+        "clabe": partner.clabe if partner.payment_method == "bank" else None,
+        "paypal_email": partner.paypal_email if partner.payment_method == "paypal" else None,
         "password": hash_password(partner.password),
         "partner_code": partner_code,
         "qr_code": qr_code,

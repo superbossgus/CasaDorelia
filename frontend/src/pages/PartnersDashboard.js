@@ -161,7 +161,7 @@ const PartnersDashboard = () => {
                 </div>
                 <div>
                   <p className="text-[#A1A1AA] text-sm">Participación</p>
-                  <p className="text-3xl font-bold text-[#708238]">{partner.participation_percent.toFixed(1)}%</p>
+                  <p className="text-3xl font-bold text-[#708238]">{partner.participation_percent.toFixed(2)}%</p>
                 </div>
                 <div>
                   <p className="text-[#A1A1AA] text-sm">Inversión Total</p>

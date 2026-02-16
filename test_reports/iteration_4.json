@@ -1,0 +1,147 @@
+{
+  "summary": "Completed comprehensive testing of Partners/Investors module (Módulo de Socios). All backend APIs pass (17/17 tests). Frontend UI fully functional with correct values displayed ($4,000, 0.05%, $100).",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": [
+    "Landing page /socios shows correct values: $4,000 MXN, 0.05%, $100 MXN, 48 months",
+    "Partner registration via /api/partners/register - SUCCESS (creates partner + auto-registers as salesperson)",
+    "Partner login via /api/partners/login - SUCCESS (returns token + masked CLABE)",
+    "Partner dashboard via /api/partners/dashboard - SUCCESS (shows correct lot price $4,000, monthly return $100)",
+    "Buy lots via /api/partners/buy-lots - SUCCESS (generates valid Stripe checkout URL)",
+    "Multiple lots calculation correct (5 lots = $20,000, 0.25%)",
+    "Zero lots purchase rejected with 400 error",
+    "Duplicate email registration rejected with 400 error",
+    "Invalid CLABE (not 18 digits) rejected with 400 error",
+    "Admin partners list via /api/partners/admin/all - SUCCESS",
+    "Admin partners stats via /api/partners/admin/stats - SUCCESS (shows $4,000 lot price)",
+    "Admin pending returns via /api/partners/admin/pending-returns - SUCCESS",
+    "Navigation from customer landing (/) to /socios - SUCCESS",
+    "'Socios Inversionistas' link visible in admin sidebar - SUCCESS",
+    "Partners Admin page loads with correct data - SUCCESS"
+  ],
+  
+  "test_report_links": [
+    "/app/backend/tests/test_partners.py",
+    "/app/test_reports/pytest/pytest_partners_results.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_partners.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (17/17 tests passed)",
+    "frontend": "100% (all features working correctly)"
+  },
+  
+  "test_credentials": {
+    "admin_email": "gustavo@lepaindore.com.mx",
+    "admin_password": "demo123",
+    "tenant_id": "9fd4933a-45fa-480a-9dc3-dbd46551b859"
+  },
+  
+  "seed_data_creation": "Multiple test partners created during testing (test.partner.* emails)",
+  
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Partners/Investors module fully functional. Values updated from $5,000/0.1%/$150 to $4,000/0.05%/$100 as requested. Stripe integration working - generates valid checkout URLs. Partners are auto-registered as salespeople with QR codes for discounts/commissions. Admin panel shows partner list, stats, and pending returns management.",
+  
+  "features_verified": {
+    "partners_landing": {
+      "status": "WORKING",
+      "url": "/socios",
+      "values_displayed": {
+        "lot_price": "$4,000 MXN",
+        "participation_per_lot": "0.05%",
+        "monthly_return": "$100 MXN",
+        "payment_months": "48"
+      }
+    },
+    "partners_registration": {
+      "status": "WORKING",
+      "url": "/socios/registro",
+      "endpoint": "/api/partners/register",
+      "features": [
+        "Form with all required fields (name, email, phone, CURP, address, bank, CLABE, password)",
+        "Lot quantity selector with live calculation",
+        "CLABE validation (18 digits)",
+        "Auto-registration as salesperson",
+        "Token generation for auto-login"
+      ]
+    },
+    "partners_login": {
+      "status": "WORKING",
+      "url": "/socios/login",
+      "endpoint": "/api/partners/login",
+      "features": [
+        "Email/password authentication",
+        "Token generation",
+        "CLABE masking (only last 4 digits shown)"
+      ]
+    },
+    "partners_dashboard": {
+      "status": "WORKING",
+      "url": "/socios/dashboard",
+      "endpoint": "/api/partners/dashboard",
+      "features": [
+        "Investment summary (lots, participation, investment amount)",
+        "QR code for discounts/commissions",
+        "Purchase history",
+        "Returns history",
+        "Buy more lots functionality"
+      ]
+    },
+    "buy_lots_stripe": {
+      "status": "WORKING",
+      "endpoint": "/api/partners/buy-lots",
+      "features": [
+        "Creates Stripe checkout session",
+        "Returns valid checkout URL",
+        "Correct amount calculation ($4,000 per lot)",
+        "Correct participation calculation (0.05% per lot)"
+      ]
+    },
+    "partners_admin": {
+      "status": "WORKING",
+      "url": "/partners-admin",
+      "sidebar_link": "Socios Inversionistas",
+      "endpoints": [
+        "/api/partners/admin/all",
+        "/api/partners/admin/stats",
+        "/api/partners/admin/pending-returns"
+      ],
+      "features": [
+        "Partners list with search",
+        "Stats cards (total partners, investment, participation, pending returns)",
+        "Lot price display and update",
+        "Generate monthly returns",
+        "Mark returns as paid"
+      ]
+    },
+    "navigation": {
+      "status": "WORKING",
+      "customer_to_partners": "Link 'Conocer más sobre el programa de Socios' on / navigates to /socios",
+      "admin_sidebar": "'Socios Inversionistas' link visible and navigates to /partners-admin"
+    }
+  },
+  
+  "mocked_apis": {
+    "has_mocked_apis": false,
+    "note": "Stripe integration is fully functional - generates real checkout URLs"
+  }
+}

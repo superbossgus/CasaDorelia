@@ -4561,11 +4561,25 @@ async def get_partner_dashboard(partner_data: dict = Depends(get_current_partner
     # Calculate current value of investment
     current_value = partner["total_lots"] * current_price
     
+    # Mask payment info based on method
+    payment_info = {}
+    if partner.get("payment_method") == "paypal":
+        paypal_email = partner.get("paypal_email", "")
+        payment_info["method"] = "paypal"
+        payment_info["paypal_masked"] = paypal_email[:3] + "***" + paypal_email[paypal_email.index("@"):] if "@" in paypal_email else paypal_email
+    else:
+        clabe = partner.get("clabe", "")
+        payment_info["method"] = "bank"
+        payment_info["clabe_last4"] = clabe[-4:] if clabe else "****"
+        payment_info["bank_name"] = partner.get("bank_name", "")
+    
     return {
         "partner": {
             **partner,
-            "clabe_last4": partner["clabe"][-4:],
+            "clabe_last4": partner.get("clabe", "")[-4:] if partner.get("clabe") else "****",
             "clabe": None,
+            "paypal_email": None,  # Don't expose full email
+            "payment_info": payment_info,
             "current_value": current_value
         },
         "purchases": purchases,

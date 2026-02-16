@@ -32,11 +32,11 @@ const PartnersLanding = () => {
           </div>
           
           <p className="text-xl md:text-2xl text-[#A1A1AA] mb-4">
-            Invierte en el crecimiento de nuestras cafeterías
+            Invierte en el Fondo Doré
           </p>
           
           <p className="text-[#708238] text-lg mb-10 max-w-2xl mx-auto">
-            Conviértete en socio inversionista y recibe rendimientos mensuales garantizados
+            Conviértete en socio inversionista y recibe rendimientos mensuales garantizados por 4 años
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -67,15 +67,15 @@ const PartnersLanding = () => {
         <div className="max-w-5xl mx-auto px-4">
           <div className="grid md:grid-cols-4 gap-6 text-center">
             <div>
-              <p className="text-4xl font-bold text-white">$5,000</p>
+              <p className="text-4xl font-bold text-white">$4,000</p>
               <p className="text-[#A1A1AA]">Inversión mínima</p>
             </div>
             <div>
-              <p className="text-4xl font-bold text-[#708238]">0.1%</p>
+              <p className="text-4xl font-bold text-[#708238]">0.05%</p>
               <p className="text-[#A1A1AA]">Participación por lote</p>
             </div>
             <div>
-              <p className="text-4xl font-bold text-white">$150</p>
+              <p className="text-4xl font-bold text-white">$100</p>
               <p className="text-[#A1A1AA]">Rendimiento mensual/lote</p>
             </div>
             <div>
@@ -127,7 +127,7 @@ const PartnersLanding = () => {
               <TrendingUp className="h-12 w-12 text-[#708238] mx-auto mb-4" />
               <h3 className="text-lg font-bold text-white mb-2">Recibe Rendimientos</h3>
               <p className="text-[#A1A1AA]">
-                Recibe $150 MXN mensuales por cada lote durante 4 años
+                Recibe $100 MXN mensuales por cada lote durante 4 años
               </p>
             </CardContent>
           </Card>
@@ -159,10 +159,10 @@ const PartnersLanding = () => {
                 {[1, 3, 5, 10, 20].map((lots) => (
                   <tr key={lots} className="border-b border-[#27272A] hover:bg-[#1F1F1F]/50">
                     <td className="py-4 px-4 text-white font-bold">{lots} lote{lots > 1 ? 's' : ''}</td>
-                    <td className="py-4 px-4 text-right text-white">${(lots * 5000).toLocaleString()}</td>
-                    <td className="py-4 px-4 text-right text-[#708238]">{(lots * 0.1).toFixed(1)}%</td>
-                    <td className="py-4 px-4 text-right text-white">${(lots * 150).toLocaleString()}</td>
-                    <td className="py-4 px-4 text-right text-[#708238] font-bold">${(lots * 150 * 48).toLocaleString()}</td>
+                    <td className="py-4 px-4 text-right text-white">${(lots * 4000).toLocaleString()}</td>
+                    <td className="py-4 px-4 text-right text-[#708238]">{(lots * 0.05).toFixed(2)}%</td>
+                    <td className="py-4 px-4 text-right text-white">${(lots * 100).toLocaleString()}</td>
+                    <td className="py-4 px-4 text-right text-[#708238] font-bold">${(lots * 100 * 48).toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -183,9 +183,9 @@ const PartnersLanding = () => {
         
         <div className="grid md:grid-cols-2 gap-6">
           {[
-            { icon: DollarSign, title: "Rendimientos Garantizados", desc: "$150 MXN mensuales por lote durante 48 meses" },
+            { icon: DollarSign, title: "Rendimientos Garantizados", desc: "$100 MXN mensuales por lote durante 48 meses" },
             { icon: TrendingUp, title: "Plusvalía", desc: "El valor de tu participación puede aumentar con el tiempo" },
-            { icon: Shield, title: "Inversión Segura", desc: "Respaldada por el crecimiento real de las cafeterías" },
+            { icon: Shield, title: "Inversión Segura", desc: "Respaldada por el crecimiento real del Fondo Doré" },
             { icon: Percent, title: "Código de Descuento", desc: "Recibe un código QR para obtener 10% de descuento y comisiones por referidos" },
             { icon: Clock, title: "Pagos Puntuales", desc: "Depósitos directos a tu cuenta bancaria cada mes" },
             { icon: CheckCircle2, title: "Transparencia Total", desc: "Accede a tu dashboard para ver el estado de tu inversión" },

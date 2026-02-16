@@ -597,9 +597,9 @@ class ApplySalespersonDiscountRequest(BaseModel):
 # ============== PARTNER/INVESTOR MODELS ==============
 
 # Investment configuration
-SHARE_LOT_PRICE = 5000.0  # $5,000 MXN per lot
-SHARE_LOT_PERCENT = 0.1   # 0.1% per lot
-MONTHLY_RETURN_PER_LOT = 150.0  # $150 MXN per lot per month
+SHARE_LOT_PRICE = 4000.0  # $4,000 MXN per lot
+SHARE_LOT_PERCENT = 0.05   # 0.05% per lot
+MONTHLY_RETURN_PER_LOT = 100.0  # $100 MXN per lot per month
 TOTAL_PAYMENT_MONTHS = 48  # 4 years
 
 class PartnerCreate(BaseModel):

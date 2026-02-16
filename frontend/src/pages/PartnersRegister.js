@@ -26,6 +26,7 @@ const PartnersRegister = () => {
   const [selectedBusiness, setSelectedBusiness] = useState("");
   const [currentPrice, setCurrentPrice] = useState(4000);
   const [lotsToBuy, setLotsToBuy] = useState(1);
+  const [paymentMethod, setPaymentMethod] = useState("bank"); // "bank" or "paypal"
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -34,6 +35,7 @@ const PartnersRegister = () => {
     address: "",
     bank_name: "",
     clabe: "",
+    paypal_email: "",
     password: "",
     confirmPassword: ""
   });

@@ -4705,6 +4705,70 @@ async def partner_payment_webhook(request: Request):
         logger.error(f"Partner webhook error: {str(e)}")
         return {"status": "error"}
 
+# Upload receipt for SPEI/PayPal payments
+@api_router.post("/partners/upload-receipt")
+async def upload_payment_receipt(
+    file: UploadFile = File(...),
+    lots: int = Form(...),
+    payment_method: str = Form(...),
+    partner_data: dict = Depends(get_current_partner)
+):
+    """Upload payment receipt for SPEI or PayPal payments"""
+    partner = await db.partners.find_one({"id": partner_data["partner_id"]}, {"_id": 0})
+    if not partner:
+        raise HTTPException(status_code=404, detail="Socio no encontrado")
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Tipo de archivo no permitido")
+    
+    # Read file content
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=400, detail="Archivo demasiado grande (máx 10MB)")
+    
+    # Save file
+    file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    receipt_filename = f"receipt_{partner_data['partner_id']}_{uuid.uuid4().hex[:8]}.{file_ext}"
+    receipt_path = f"uploads/receipts/{receipt_filename}"
+    
+    os.makedirs("uploads/receipts", exist_ok=True)
+    with open(receipt_path, "wb") as f:
+        f.write(content)
+    
+    # Get current lot price
+    current_price = await get_current_lot_price(partner["tenant_id"])
+    total_amount = lots * current_price
+    participation = lots * SHARE_LOT_PERCENT
+    
+    # Create purchase record with receipt
+    purchase_id = str(uuid.uuid4())
+    purchase = {
+        "id": purchase_id,
+        "partner_id": partner["id"],
+        "tenant_id": partner["tenant_id"],
+        "lots": lots,
+        "price_per_lot": current_price,
+        "total_amount": total_amount,
+        "participation_percent": participation,
+        "payment_method": payment_method,
+        "status": "pending_verification",
+        "receipt_url": f"/uploads/receipts/{receipt_filename}",
+        "stripe_session_id": None,
+        "certificate_url": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.share_purchases.insert_one(purchase)
+    
+    logger.info(f"Receipt uploaded for partner {partner['name']}: {lots} lots via {payment_method}")
+    
+    return {
+        "message": "Comprobante recibido. Tu compra será verificada pronto.",
+        "purchase_id": purchase_id,
+        "status": "pending_verification"
+    }
+
 # Manual confirmation of purchase (for admin)
 @api_router.post("/partners/confirm-purchase/{purchase_id}")
 async def confirm_partner_purchase(

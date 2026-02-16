@@ -3,16 +3,34 @@ import { useNavigate, Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { toast } from "sonner";
 import axios from "axios";
 import { QRCodeSVG } from "qrcode.react";
 import { 
   TrendingUp, DollarSign, Percent, Calendar, 
   Loader2, Download, Share2, LogOut, QrCode,
-  CheckCircle2, Clock, CreditCard, FileText
+  CheckCircle2, Clock, CreditCard, FileText,
+  Upload, Building, Copy, X
 } from "lucide-react";
 
 const API = process.env.REACT_APP_BACKEND_URL;
+
+// Logo de Doré en blanco para fondos oscuros
+const DORE_LOGO_WHITE = "https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png";
+
+// Datos de cuenta SPEI
+const SPEI_DATA = {
+  beneficiary: "Grupo Viter, S.A. de C.V.",
+  rfc: "GVI160429NL9",
+  bank: "BBVA Bancomer",
+  account: "0106483542",
+  clabe: "012180001064835429"
+};
+
+// PayPal link
+const PAYPAL_LINK = "https://paypal.me/grupoviter";
 
 const PartnersDashboard = () => {
   const navigate = useNavigate();
@@ -20,7 +38,13 @@ const PartnersDashboard = () => {
   const [dashboard, setDashboard] = useState(null);
   const [buying, setBuying] = useState(false);
   const [showQR, setShowQR] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [selectedLots, setSelectedLots] = useState(1);
+  const [paymentStep, setPaymentStep] = useState("select"); // "select", "spei", "paypal", "upload"
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
+  const [receiptFile, setReceiptFile] = useState(null);
   const qrRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const partnerToken = localStorage.getItem("partner_token");
 

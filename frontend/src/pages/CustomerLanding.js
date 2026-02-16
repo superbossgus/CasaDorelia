@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { Gift, Star, Crown, Coffee, QrCode, Percent, Cake } from "lucide-react";
+import { Gift, Star, Crown, Coffee, QrCode, Percent, Cake, TrendingUp } from "lucide-react";
 
 const CustomerLanding = () => {
   return (
@@ -244,6 +244,27 @@ const CustomerLanding = () => {
         </Link>
       </div>
 
+      {/* Investor CTA */}
+      <div className="bg-gradient-to-r from-[#708238]/10 to-transparent py-12 border-t border-[#27272A]">
+        <div className="max-w-3xl mx-auto px-4 text-center">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <TrendingUp className="h-8 w-8 text-[#708238]" />
+            <h2 className="text-xl font-bold text-white">¿Quieres invertir en Doré?</h2>
+          </div>
+          <p className="text-[#A1A1AA] mb-4">
+            Conviértete en socio inversionista del Fondo Doré y recibe rendimientos mensuales garantizados
+          </p>
+          <Link to="/socios">
+            <Button 
+              variant="outline"
+              className="border-[#708238] text-[#708238] hover:bg-[#708238]/10"
+            >
+              Conocer más sobre el programa de Socios
+            </Button>
+          </Link>
+        </div>
+      </div>
+
       {/* Footer */}
       <footer className="border-t border-[#27272A] py-8">
         <div className="max-w-5xl mx-auto px-4">
@@ -257,6 +278,9 @@ const CustomerLanding = () => {
               <span className="text-white font-manrope font-bold">Le Pain Doré</span>
             </div>
             <div className="flex gap-6 text-sm text-[#71717A]">
+              <Link to="/socios" className="hover:text-white transition-colors">
+                Socios Inversionistas
+              </Link>
               <Link to="/admin" className="hover:text-white transition-colors">
                 Acceso Empleados
               </Link>

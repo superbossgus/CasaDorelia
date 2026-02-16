@@ -212,7 +212,7 @@ const PartnersRegister = () => {
                   </div>
                   <div>
                     <p className="text-[#71717A]">Participación:</p>
-                    <p className="text-[#708238] font-bold text-lg">{participation.toFixed(1)}%</p>
+                    <p className="text-[#708238] font-bold text-lg">{participation.toFixed(2)}%</p>
                   </div>
                   <div>
                     <p className="text-[#71717A]">Rendimiento mensual:</p>

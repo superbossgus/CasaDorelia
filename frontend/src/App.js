@@ -27,6 +27,12 @@ import LoyaltyLogin from "./pages/LoyaltyLogin";
 import LoyaltyRegister from "./pages/LoyaltyRegister";
 import LoyaltyRewards from "./pages/LoyaltyRewards";
 import SalespeopleAdmin from "./pages/SalespeopleAdmin";
+import PartnersLanding from "./pages/PartnersLanding";
+import PartnersRegister from "./pages/PartnersRegister";
+import PartnersLogin from "./pages/PartnersLogin";
+import PartnersDashboard from "./pages/PartnersDashboard";
+import PartnersPurchaseSuccess from "./pages/PartnersPurchaseSuccess";
+import PartnersAdmin from "./pages/PartnersAdmin";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {

@@ -608,8 +608,10 @@ class PartnerCreate(BaseModel):
     phone: str
     curp: Optional[str] = None  # Mexican ID
     address: Optional[str] = None
-    bank_name: str
-    clabe: str  # 18-digit Mexican bank account
+    payment_method: str = "bank"  # "bank" or "paypal"
+    bank_name: Optional[str] = None
+    clabe: Optional[str] = None  # 18-digit Mexican bank account
+    paypal_email: Optional[str] = None  # PayPal email for payments
     password: str
     lots_to_buy: int = 1
 

@@ -73,6 +73,13 @@ function App() {
           <Route path="/loyalty/register" element={<LoyaltyRegister />} />
           <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
           
+          {/* ========== PARTNER/INVESTOR ROUTES (Public) ========== */}
+          <Route path="/socios" element={<PartnersLanding />} />
+          <Route path="/socios/registro" element={<PartnersRegister />} />
+          <Route path="/socios/login" element={<PartnersLogin />} />
+          <Route path="/socios/dashboard" element={<PartnersDashboard />} />
+          <Route path="/socios/success" element={<PartnersPurchaseSuccess />} />
+          
           {/* ========== BUSINESS/ADMIN ROUTES ========== */}
           <Route path="/admin" element={<Login />} />
           <Route path="/admin/forgot-password" element={<ForgotPassword />} />

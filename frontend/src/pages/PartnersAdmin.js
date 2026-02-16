@@ -281,7 +281,7 @@ const PartnersAdmin = () => {
           </div>
           <p className="text-xs text-[#71717A] mt-2">
             <AlertCircle className="h-3 w-3 inline mr-1" />
-            El precio solo puede aumentar (mínimo $5,000). Esto incrementa el valor de las participaciones existentes.
+            El precio solo puede aumentar (mínimo $4,000). Esto incrementa el valor de las participaciones existentes.
           </p>
         </CardContent>
       </Card>

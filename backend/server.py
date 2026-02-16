@@ -4632,7 +4632,7 @@ async def create_lot_purchase(lots: int, partner_data: dict = Depends(get_curren
             }
         )
         
-        session = stripe_checkout.create_checkout_session(checkout_request)
+        session = await stripe_checkout.create_checkout_session(checkout_request)
         
         # Update purchase with session ID
         await db.share_purchases.update_one(

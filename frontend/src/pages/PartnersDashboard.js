@@ -373,7 +373,7 @@ const PartnersDashboard = () => {
               {[1, 3, 5, 10].map((lots) => (
                 <Button
                   key={lots}
-                  onClick={() => handleBuyLots(lots)}
+                  onClick={() => openPaymentModal(lots)}
                   disabled={buying}
                   variant="outline"
                   className="bg-transparent border-[#27272A] hover:border-[#708238] hover:bg-[#708238]/10 flex-col h-auto py-4"
@@ -386,6 +386,310 @@ const PartnersDashboard = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Payment Modal */}
+        {showPaymentModal && (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+            <div className="bg-[#161616] rounded-xl border border-[#27272A] w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold text-white">
+                    Comprar {selectedLots} Lote{selectedLots > 1 ? 's' : ''}
+                  </h2>
+                  <button 
+                    onClick={() => setShowPaymentModal(false)}
+                    className="text-[#A1A1AA] hover:text-white"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
+                </div>
+
+                <div className="p-4 bg-[#0D0D0D] rounded-lg border border-[#27272A] mb-6">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#A1A1AA]">Total a pagar:</span>
+                    <span className="text-2xl font-bold text-[#708238]">
+                      {formatCurrency(selectedLots * current_lot_price)} MXN
+                    </span>
+                  </div>
+                  <p className="text-sm text-[#71717A] mt-2">
+                    {(selectedLots * 0.05).toFixed(2)}% de participación • ${selectedLots * monthly_return_per_lot}/mes
+                  </p>
+                </div>
+
+                {paymentStep === "select" && (
+                  <div className="space-y-3">
+                    <p className="text-[#A1A1AA] mb-4">Selecciona tu método de pago:</p>
+                    
+                    {/* Stripe Option */}
+                    <button
+                      onClick={() => handleBuyLots(selectedLots, "stripe")}
+                      disabled={buying}
+                      className="w-full p-4 rounded-lg border-2 border-[#27272A] bg-[#0D0D0D] hover:border-[#708238] transition-all flex items-center gap-4"
+                    >
+                      <div className="p-3 bg-[#635bff]/20 rounded-lg">
+                        <CreditCard className="h-6 w-6 text-[#635bff]" />
+                      </div>
+                      <div className="text-left flex-1">
+                        <p className="text-white font-medium">Tarjeta Bancaria</p>
+                        <p className="text-sm text-[#71717A]">Pago seguro con Stripe</p>
+                      </div>
+                      {buying && <Loader2 className="h-5 w-5 animate-spin text-[#708238]" />}
+                    </button>
+
+                    {/* PayPal Option */}
+                    <button
+                      onClick={() => setPaymentStep("paypal")}
+                      className="w-full p-4 rounded-lg border-2 border-[#27272A] bg-[#0D0D0D] hover:border-[#0070ba] transition-all flex items-center gap-4"
+                    >
+                      <div className="p-3 bg-[#0070ba]/20 rounded-lg">
+                        <svg viewBox="0 0 24 24" className="h-6 w-6 text-[#0070ba]" fill="currentColor">
+                          <path d="M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 6.797-8.647 6.797h-2.19c-.524 0-.968.382-1.05.9l-1.12 7.106zm14.146-14.42a3.35 3.35 0 0 0-.607-.541c-.013.076-.026.175-.041.254-.93 4.778-4.005 7.201-9.138 7.201h-2.19a.563.563 0 0 0-.556.479l-1.187 7.527-.336 2.131a.32.32 0 0 0 .317.37h4.103a.505.505 0 0 0 .499-.426l.02-.106.396-2.513.026-.14a.505.505 0 0 1 .499-.426h.315c4.036 0 7.19-1.64 8.116-6.378.387-1.976.186-3.632-.836-4.432z"/>
+                        </svg>
+                      </div>
+                      <div className="text-left flex-1">
+                        <p className="text-white font-medium">PayPal</p>
+                        <p className="text-sm text-[#71717A]">paypal.me/grupoviter</p>
+                      </div>
+                    </button>
+
+                    {/* SPEI Option */}
+                    <button
+                      onClick={() => setPaymentStep("spei")}
+                      className="w-full p-4 rounded-lg border-2 border-[#27272A] bg-[#0D0D0D] hover:border-[#004481] transition-all flex items-center gap-4"
+                    >
+                      <div className="p-3 bg-[#004481]/20 rounded-lg">
+                        <Building className="h-6 w-6 text-[#004481]" />
+                      </div>
+                      <div className="text-left flex-1">
+                        <p className="text-white font-medium">Depósito SPEI</p>
+                        <p className="text-sm text-[#71717A]">Transferencia bancaria</p>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                {paymentStep === "paypal" && (
+                  <div className="space-y-4">
+                    <button 
+                      onClick={() => setPaymentStep("select")}
+                      className="text-[#708238] text-sm hover:underline"
+                    >
+                      ← Volver a opciones de pago
+                    </button>
+
+                    <div className="p-4 bg-[#0070ba]/10 rounded-lg border border-[#0070ba]/30">
+                      <div className="flex items-center gap-3 mb-4">
+                        <svg viewBox="0 0 24 24" className="h-8 w-8 text-[#0070ba]" fill="currentColor">
+                          <path d="M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 6.797-8.647 6.797h-2.19c-.524 0-.968.382-1.05.9l-1.12 7.106zm14.146-14.42a3.35 3.35 0 0 0-.607-.541c-.013.076-.026.175-.041.254-.93 4.778-4.005 7.201-9.138 7.201h-2.19a.563.563 0 0 0-.556.479l-1.187 7.527-.336 2.131a.32.32 0 0 0 .317.37h4.103a.505.505 0 0 0 .499-.426l.02-.106.396-2.513.026-.14a.505.505 0 0 1 .499-.426h.315c4.036 0 7.19-1.64 8.116-6.378.387-1.976.186-3.632-.836-4.432z"/>
+                        </svg>
+                        <h3 className="text-white font-bold">Pago por PayPal</h3>
+                      </div>
+                      
+                      <p className="text-[#A1A1AA] mb-4">
+                        1. Haz clic en el botón para ir a PayPal
+                      </p>
+                      
+                      <a
+                        href={`${PAYPAL_LINK}/${selectedLots * current_lot_price}MXN`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block w-full"
+                      >
+                        <Button className="w-full bg-[#0070ba] hover:bg-[#005ea6] text-white">
+                          Pagar ${(selectedLots * current_lot_price).toLocaleString()} MXN en PayPal
+                        </Button>
+                      </a>
+
+                      <p className="text-[#A1A1AA] mt-4 mb-2">
+                        2. Después de pagar, sube tu comprobante:
+                      </p>
+                    </div>
+
+                    {/* Upload Receipt */}
+                    <div className="space-y-3">
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileSelect}
+                        accept="image/*,.pdf"
+                        className="hidden"
+                      />
+                      
+                      <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-[#27272A] rounded-lg p-6 text-center cursor-pointer hover:border-[#708238] transition-colors"
+                      >
+                        {receiptFile ? (
+                          <div className="flex items-center justify-center gap-3">
+                            <FileText className="h-8 w-8 text-[#708238]" />
+                            <div className="text-left">
+                              <p className="text-white font-medium">{receiptFile.name}</p>
+                              <p className="text-sm text-[#71717A]">{(receiptFile.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <Upload className="h-10 w-10 text-[#52525B] mx-auto mb-2" />
+                            <p className="text-[#A1A1AA]">Subir comprobante</p>
+                            <p className="text-xs text-[#71717A]">Imagen o PDF (máx 10MB)</p>
+                          </>
+                        )}
+                      </div>
+
+                      <Button
+                        onClick={handleUploadReceipt}
+                        disabled={!receiptFile || uploadingReceipt}
+                        className="w-full bg-[#708238] hover:bg-[#5a692d]"
+                      >
+                        {uploadingReceipt ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Subiendo...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="h-4 w-4 mr-2" />
+                            Enviar Comprobante
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {paymentStep === "spei" && (
+                  <div className="space-y-4">
+                    <button 
+                      onClick={() => setPaymentStep("select")}
+                      className="text-[#708238] text-sm hover:underline"
+                    >
+                      ← Volver a opciones de pago
+                    </button>
+
+                    <div className="p-4 bg-[#004481]/10 rounded-lg border border-[#004481]/30">
+                      <div className="flex items-center gap-3 mb-4">
+                        <Building className="h-8 w-8 text-[#004481]" />
+                        <h3 className="text-white font-bold">Datos para Transferencia SPEI</h3>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center p-3 bg-[#0D0D0D] rounded-lg">
+                          <div>
+                            <p className="text-xs text-[#71717A]">Beneficiario</p>
+                            <p className="text-white font-medium">{SPEI_DATA.beneficiary}</p>
+                          </div>
+                          <button onClick={() => copyToClipboard(SPEI_DATA.beneficiary)} className="text-[#708238]">
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="flex justify-between items-center p-3 bg-[#0D0D0D] rounded-lg">
+                          <div>
+                            <p className="text-xs text-[#71717A]">RFC</p>
+                            <p className="text-white font-mono">{SPEI_DATA.rfc}</p>
+                          </div>
+                          <button onClick={() => copyToClipboard(SPEI_DATA.rfc)} className="text-[#708238]">
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="flex justify-between items-center p-3 bg-[#0D0D0D] rounded-lg">
+                          <div>
+                            <p className="text-xs text-[#71717A]">Banco</p>
+                            <p className="text-white">{SPEI_DATA.bank}</p>
+                          </div>
+                          <button onClick={() => copyToClipboard(SPEI_DATA.bank)} className="text-[#708238]">
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="flex justify-between items-center p-3 bg-[#0D0D0D] rounded-lg">
+                          <div>
+                            <p className="text-xs text-[#71717A]">No. Cuenta</p>
+                            <p className="text-white font-mono">{SPEI_DATA.account}</p>
+                          </div>
+                          <button onClick={() => copyToClipboard(SPEI_DATA.account)} className="text-[#708238]">
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="flex justify-between items-center p-3 bg-[#708238]/20 rounded-lg border border-[#708238]/30">
+                          <div>
+                            <p className="text-xs text-[#A1A1AA]">CLABE Interbancaria</p>
+                            <p className="text-[#708238] font-mono font-bold text-lg">{SPEI_DATA.clabe}</p>
+                          </div>
+                          <button onClick={() => copyToClipboard(SPEI_DATA.clabe)} className="text-[#708238]">
+                            <Copy className="h-5 w-5" />
+                          </button>
+                        </div>
+
+                        <div className="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/30">
+                          <p className="text-yellow-400 text-sm">
+                            <strong>Importante:</strong> En el concepto de la transferencia incluye tu código de socio: <span className="font-mono">{partner.partner_code}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Upload Receipt */}
+                    <div className="space-y-3">
+                      <p className="text-[#A1A1AA]">
+                        Después de realizar la transferencia, sube tu comprobante:
+                      </p>
+                      
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileSelect}
+                        accept="image/*,.pdf"
+                        className="hidden"
+                      />
+                      
+                      <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-[#27272A] rounded-lg p-6 text-center cursor-pointer hover:border-[#708238] transition-colors"
+                      >
+                        {receiptFile ? (
+                          <div className="flex items-center justify-center gap-3">
+                            <FileText className="h-8 w-8 text-[#708238]" />
+                            <div className="text-left">
+                              <p className="text-white font-medium">{receiptFile.name}</p>
+                              <p className="text-sm text-[#71717A]">{(receiptFile.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <Upload className="h-10 w-10 text-[#52525B] mx-auto mb-2" />
+                            <p className="text-[#A1A1AA]">Subir comprobante</p>
+                            <p className="text-xs text-[#71717A]">Imagen o PDF (máx 10MB)</p>
+                          </>
+                        )}
+                      </div>
+
+                      <Button
+                        onClick={handleUploadReceipt}
+                        disabled={!receiptFile || uploadingReceipt}
+                        className="w-full bg-[#708238] hover:bg-[#5a692d]"
+                      >
+                        {uploadingReceipt ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Subiendo...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="h-4 w-4 mr-2" />
+                            Enviar Comprobante
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Purchase History */}
         {purchases && purchases.length > 0 && (

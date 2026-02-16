@@ -7,6 +7,9 @@ import {
 } from "lucide-react";
 
 const PartnersLanding = () => {
+  // Logo de Doré en blanco para fondos oscuros
+  const DORE_LOGO_WHITE = "https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png";
+  
   return (
     <div className="min-h-screen bg-[#0D0D0D]">
       {/* Hero */}
@@ -22,9 +25,9 @@ const PartnersLanding = () => {
         <div className="relative z-10 max-w-5xl mx-auto px-4 pt-16 pb-24 text-center">
           <div className="flex items-center justify-center gap-3 mb-6">
             <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
+              src={DORE_LOGO_WHITE}
               alt="Doré" 
-              className="h-14 w-auto"
+              className="h-14 w-auto brightness-0 invert"
             />
             <h1 className="font-manrope text-4xl md:text-5xl font-bold text-white">
               Socios Doré

@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-16 de Febrero, 2026
+16 de Febrero, 2026 (v2)
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -128,16 +128,23 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Panel Admin**: Gestión de vendedores y comisiones
 
 ### Módulo de Socios/Inversionistas (16-Feb-2026)
-- ✅ **Landing Page** (`/socios`): Información del programa de inversión
+- ✅ **Landing Page** (`/socios`): Información del programa de inversión con logo en blanco
 - ✅ **Registro de Socios** (`/socios/registro`): Con auto-registro como vendedor
+  - Opción de cuenta bancaria (CLABE)
+  - Opción de PayPal (correo)
 - ✅ **Login de Socios** (`/socios/login`): Autenticación separada
 - ✅ **Dashboard de Socio** (`/socios/dashboard`):
   - Resumen de inversión (lotes, participación, rendimientos)
   - Código QR para descuentos/comisiones
   - Historial de compras
   - Historial de pagos
-  - Botón para comprar más lotes
-- ✅ **Compra de Lotes vía Stripe**:
+  - Modal de compra con 3 opciones de pago
+- ✅ **Métodos de Pago para Compra de Lotes**:
+  - **Tarjeta Bancaria**: Pago seguro con Stripe
+  - **PayPal**: paypal.me/grupoviter con subida de comprobante
+  - **Depósito SPEI**: Datos de Grupo Viter (CLABE: 012180001064835429)
+- ✅ **Subida de Comprobantes**: Imagen o PDF hasta 10MB
+- ✅ **Configuración de Inversión**:
   - Precio por lote: $4,000 MXN
   - Participación: 0.05% por lote
   - Rendimiento: $100 MXN mensual por lote
@@ -146,7 +153,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
   - Lista de socios con búsqueda
   - Estadísticas globales
   - Generación de rendimientos mensuales
-  - Marcado de pagos realizados
+  - Verificación de comprobantes de pago
   - Actualización de precio de lote
 
 ### Integración Clip POS

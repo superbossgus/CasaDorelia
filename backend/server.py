@@ -4740,6 +4740,24 @@ async def get_investment_projection(
         }
     }
 
+# Update partner reinvestment settings
+@api_router.put("/partners/reinvestment-settings")
+async def update_reinvestment_settings(
+    reinvest_enabled: bool,
+    reinvest_until_month: int = 36,
+    partner_data: dict = Depends(get_current_partner)
+):
+    """Update partner's reinvestment preferences"""
+    await db.partners.update_one(
+        {"id": partner_data["partner_id"]},
+        {"$set": {
+            "reinvest_enabled": reinvest_enabled,
+            "reinvest_until_month": reinvest_until_month,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    return {"message": "Configuración de reinversión actualizada", "reinvest_enabled": reinvest_enabled}
+
 # Create checkout session for buying lots
 @api_router.post("/partners/buy-lots")
 async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: dict = Depends(get_current_partner)):

@@ -4590,6 +4590,156 @@ async def get_partner_dashboard(partner_data: dict = Depends(get_current_partner
         "total_payment_months": TOTAL_PAYMENT_MONTHS
     }
 
+# Calculate investment projection for partners
+@api_router.get("/partners/projection")
+async def get_investment_projection(
+    reinvest: bool = True,
+    reinvest_until_month: int = 36,
+    partner_data: dict = Depends(get_current_partner)
+):
+    """Calculate 48-month investment projection with optional reinvestment"""
+    partner = await db.partners.find_one({"id": partner_data["partner_id"]}, {"_id": 0})
+    if not partner:
+        raise HTTPException(status_code=404, detail="Socio no encontrado")
+    
+    # Get current lot price
+    current_price = await get_current_lot_price(partner["tenant_id"])
+    
+    # Initial values
+    initial_investment = partner["total_investment"]
+    initial_lots = partner["total_lots"]
+    
+    if initial_lots == 0:
+        return {
+            "projection": [],
+            "kpis": {
+                "initial_investment": 0,
+                "initial_lots": 0,
+                "final_lots": 0,
+                "initial_monthly_dividend": 0,
+                "final_monthly_dividend": 0,
+                "total_dividends_received": 0,
+                "total_interest_earned": 0,
+                "total_lots_purchased": 0,
+                "recovery_month": 0,
+                "final_portfolio_value": 0,
+                "roi_percentage": 0
+            }
+        }
+    
+    # Configuration
+    dividend_per_lot = MONTHLY_RETURN_PER_LOT  # $100
+    annual_interest_rate = 0.10  # 10% annual interest on reinvested balance
+    monthly_interest_rate = annual_interest_rate / 12
+    total_months = TOTAL_PAYMENT_MONTHS  # 48
+    
+    # Projection calculation
+    projection = []
+    
+    lots_current = initial_lots
+    reinvested_balance = 0.0
+    total_dividends = 0.0
+    total_interest = 0.0
+    total_lots_purchased = 0
+    recovery_month = 0
+    
+    for month in range(1, total_months + 1):
+        # Monthly dividend
+        monthly_dividend = lots_current * dividend_per_lot
+        total_dividends += monthly_dividend
+        
+        # Interest on reinvested balance
+        interest_earned = reinvested_balance * monthly_interest_rate
+        total_interest += interest_earned
+        
+        # Available cash
+        available_cash = monthly_dividend + interest_earned
+        
+        # Reinvestment logic
+        lots_purchased = 0
+        purchase_cost = 0
+        
+        if reinvest and month <= reinvest_until_month:
+            # Add to reinvested balance
+            reinvested_balance += available_cash
+            
+            # Buy lots if enough balance
+            while reinvested_balance >= current_price:
+                reinvested_balance -= current_price
+                lots_purchased += 1
+                purchase_cost += current_price
+                lots_current += 1
+                total_lots_purchased += 1
+        else:
+            # No reinvestment - just accumulate
+            reinvested_balance += available_cash
+        
+        # Portfolio value
+        portfolio_value = (lots_current * current_price) + reinvested_balance
+        
+        # Check recovery
+        if recovery_month == 0 and portfolio_value >= initial_investment:
+            recovery_month = month
+        
+        # Calculate cumulative return
+        cumulative_return = portfolio_value - initial_investment
+        roi_percentage = (cumulative_return / initial_investment * 100) if initial_investment > 0 else 0
+        
+        projection.append({
+            "month": month,
+            "lots_start": lots_current - lots_purchased,
+            "dividend_per_lot": dividend_per_lot,
+            "monthly_dividend": monthly_dividend,
+            "reinvested_balance_start": reinvested_balance - available_cash + purchase_cost,
+            "interest_earned": round(interest_earned, 2),
+            "available_cash": round(available_cash, 2),
+            "lots_purchased": lots_purchased,
+            "purchase_cost": purchase_cost,
+            "reinvested_balance_end": round(reinvested_balance, 2),
+            "lots_end": lots_current,
+            "next_month_dividend": lots_current * dividend_per_lot,
+            "portfolio_value": round(portfolio_value, 2),
+            "cumulative_return": round(cumulative_return, 2),
+            "roi_percentage": round(roi_percentage, 2),
+            "recovered": portfolio_value >= initial_investment
+        })
+    
+    # Final KPIs
+    final_month = projection[-1] if projection else None
+    
+    kpis = {
+        "initial_investment": initial_investment,
+        "initial_lots": initial_lots,
+        "final_lots": lots_current,
+        "lots_growth": lots_current - initial_lots,
+        "initial_monthly_dividend": initial_lots * dividend_per_lot,
+        "final_monthly_dividend": lots_current * dividend_per_lot,
+        "total_dividends_received": round(total_dividends, 2),
+        "total_interest_earned": round(total_interest, 2),
+        "total_lots_purchased": total_lots_purchased,
+        "recovery_month": recovery_month,
+        "final_reinvested_balance": round(reinvested_balance, 2),
+        "lots_value_at_cost": lots_current * current_price,
+        "final_portfolio_value": round(final_month["portfolio_value"], 2) if final_month else 0,
+        "total_return": round((final_month["portfolio_value"] - initial_investment), 2) if final_month else 0,
+        "roi_percentage": round(final_month["roi_percentage"], 2) if final_month else 0,
+        "participation_initial": initial_lots * SHARE_LOT_PERCENT,
+        "participation_final": lots_current * SHARE_LOT_PERCENT
+    }
+    
+    return {
+        "projection": projection,
+        "kpis": kpis,
+        "config": {
+            "reinvest_enabled": reinvest,
+            "reinvest_until_month": reinvest_until_month,
+            "current_lot_price": current_price,
+            "dividend_per_lot": dividend_per_lot,
+            "annual_interest_rate": annual_interest_rate,
+            "total_months": total_months
+        }
+    }
+
 # Create checkout session for buying lots
 @api_router.post("/partners/buy-lots")
 async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: dict = Depends(get_current_partner)):

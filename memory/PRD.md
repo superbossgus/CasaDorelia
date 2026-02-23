@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-16 de Febrero, 2026 (v2)
+23 de Febrero, 2026
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -127,18 +127,36 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Sistema de Comisiones**: 10% de las ventas referidas
 - ✅ **Panel Admin**: Gestión de vendedores y comisiones
 
-### Módulo de Socios/Inversionistas (16-Feb-2026)
+### Módulo de Socios/Inversionistas (23-Feb-2026)
 - ✅ **Landing Page** (`/socios`): Información del programa de inversión con logo en blanco
 - ✅ **Registro de Socios** (`/socios/registro`): Con auto-registro como vendedor
   - Opción de cuenta bancaria (CLABE)
   - Opción de PayPal (correo)
 - ✅ **Login de Socios** (`/socios/login`): Autenticación separada
-- ✅ **Dashboard de Socio** (`/socios/dashboard`):
-  - Resumen de inversión (lotes, participación, rendimientos)
+- ✅ **Dashboard Avanzado** (`/socios/dashboard`) con 3 pestañas:
+  
+  **Pestaña 1: Resumen Ejecutivo**
+  - KPIs principales: Inversión Total, Participación %, Dividendo Mensual, Valor Portafolio
+  - Proyección resumida a 48 meses (lotes finales, dividendo final, ROI)
+  - Gráfica de crecimiento del portafolio
   - Código QR para descuentos/comisiones
-  - Historial de compras
-  - Historial de pagos
-  - Modal de compra con 3 opciones de pago
+  - Comprar más lotes con 3 métodos de pago
+  
+  **Pestaña 2: Proyección de Inversión**
+  - Configuración de reinversión automática (toggle on/off)
+  - Selector "Reinvertir hasta el mes X" (1-48)
+  - KPIs detallados: Inversión inicial, Lotes finales, Participación final, Mes de recuperación
+  - Totales: Dividendos recibidos, Interés ganado
+  - Gráfica de Crecimiento del Portafolio (AreaChart)
+  - Gráfica de Crecimiento de Lotes (LineChart dual)
+  - Tabla Detallada de Corrida Mensual (48 filas, colapsable)
+    - Columnas: Mes, Lotes, Dividendo, Interés, Lotes+, Valor Port., ROI
+  
+  **Pestaña 3: Historial y Pagos**
+  - Historial de compras con status (Completado/Pendiente/En verificación)
+  - Historial de rendimientos mensuales
+  - Datos de pago registrados (Banco o PayPal)
+
 - ✅ **Métodos de Pago para Compra de Lotes**:
   - **Tarjeta Bancaria**: Pago seguro con Stripe
   - **PayPal**: paypal.me/grupoviter con subida de comprobante
@@ -146,8 +164,9 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Subida de Comprobantes**: Imagen o PDF hasta 10MB
 - ✅ **Configuración de Inversión**:
   - Precio por lote: $4,000 MXN
-  - Participación: 0.05% por lote
+  - Participación: 0.1% por lote
   - Rendimiento: $100 MXN mensual por lote
+  - Interés sobre saldo reinvertido: 10% anual
   - Duración: 48 meses de pagos
 - ✅ **Panel Admin** (`/partners-admin`):
   - Lista de socios con búsqueda

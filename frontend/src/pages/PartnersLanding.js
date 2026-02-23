@@ -74,7 +74,7 @@ const PartnersLanding = () => {
               <p className="text-[#A1A1AA]">Inversión mínima</p>
             </div>
             <div>
-              <p className="text-4xl font-bold text-[#708238]">0.05%</p>
+              <p className="text-4xl font-bold text-[#708238]">0.1%</p>
               <p className="text-[#A1A1AA]">Participación por lote</p>
             </div>
             <div>
@@ -163,7 +163,7 @@ const PartnersLanding = () => {
                   <tr key={lots} className="border-b border-[#27272A] hover:bg-[#1F1F1F]/50">
                     <td className="py-4 px-4 text-white font-bold">{lots} lote{lots > 1 ? 's' : ''}</td>
                     <td className="py-4 px-4 text-right text-white">${(lots * 4000).toLocaleString()}</td>
-                    <td className="py-4 px-4 text-right text-[#708238]">{(lots * 0.05).toFixed(2)}%</td>
+                    <td className="py-4 px-4 text-right text-[#708238]">{(lots * 0.1).toFixed(1)}%</td>
                     <td className="py-4 px-4 text-right text-white">${(lots * 100).toLocaleString()}</td>
                     <td className="py-4 px-4 text-right text-[#708238] font-bold">${(lots * 100 * 48).toLocaleString()}</td>
                   </tr>

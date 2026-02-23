@@ -145,7 +145,7 @@ const PartnersRegister = () => {
   };
 
   const totalInvestment = lotsToBuy * currentPrice;
-  const participation = lotsToBuy * 0.05;
+  const participation = lotsToBuy * 0.1;
   const monthlyReturn = lotsToBuy * 100;
   const totalReturn = monthlyReturn * 48;
 

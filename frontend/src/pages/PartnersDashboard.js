@@ -412,7 +412,7 @@ const PartnersDashboard = () => {
                     </span>
                   </div>
                   <p className="text-sm text-[#71717A] mt-2">
-                    {(selectedLots * 0.05).toFixed(2)}% de participación • ${selectedLots * monthly_return_per_lot}/mes
+                    {(selectedLots * 0.1).toFixed(1)}% de participación • ${selectedLots * monthly_return_per_lot}/mes
                   </p>
                 </div>
 

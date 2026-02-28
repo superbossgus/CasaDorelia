@@ -209,6 +209,12 @@ function App() {
               <Layout><PartnersAdmin /></Layout>
             </ProtectedRoute>
           } />
+          
+          <Route path="/coupons" element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <Layout><CouponsAdmin /></Layout>
+            </ProtectedRoute>
+          } />
         </Routes>
         <Toaster 
           position="top-right" 

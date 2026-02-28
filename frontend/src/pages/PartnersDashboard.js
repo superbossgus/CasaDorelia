@@ -18,7 +18,8 @@ import {
   Loader2, Download, Share2, LogOut, QrCode,
   CheckCircle2, Clock, CreditCard, FileText,
   Upload, Building, Copy, X, ChevronDown, ChevronUp,
-  PiggyBank, Target, ArrowUpRight, RefreshCw, Info
+  PiggyBank, Target, ArrowUpRight, RefreshCw, Info,
+  Ticket, AlertTriangle
 } from "lucide-react";
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -42,6 +43,7 @@ const PartnersDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [dashboard, setDashboard] = useState(null);
   const [projection, setProjection] = useState(null);
+  const [fundStatus, setFundStatus] = useState(null);
   const [loadingProjection, setLoadingProjection] = useState(false);
   const [buying, setBuying] = useState(false);
   const [showQR, setShowQR] = useState(false);
@@ -50,10 +52,13 @@ const PartnersDashboard = () => {
   const [paymentStep, setPaymentStep] = useState("select");
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [receiptFile, setReceiptFile] = useState(null);
-  const [activeTab, setActiveTab] = useState("resumen"); // resumen, proyeccion, historial
+  const [activeTab, setActiveTab] = useState("resumen");
   const [reinvestEnabled, setReinvestEnabled] = useState(true);
   const [reinvestUntilMonth, setReinvestUntilMonth] = useState(36);
   const [showProjectionTable, setShowProjectionTable] = useState(false);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponValidation, setCouponValidation] = useState(null);
+  const [validatingCoupon, setValidatingCoupon] = useState(false);
   const qrRef = useRef(null);
   const fileInputRef = useRef(null);
 

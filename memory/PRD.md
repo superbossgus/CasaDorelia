@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-23 de Febrero, 2026
+28 de Febrero, 2026
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -127,7 +127,33 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Sistema de Comisiones**: 10% de las ventas referidas
 - ✅ **Panel Admin**: Gestión de vendedores y comisiones
 
-### Módulo de Socios/Inversionistas (23-Feb-2026)
+### Sistema de Cupones de Descuento (28-Feb-2026)
+- ✅ **Panel Admin** (`/coupons`):
+  - Crear cupones con código único
+  - Tipos de descuento: Porcentaje (%) o Monto Fijo ($)
+  - Válido para: Suscripciones, Inversiones, o Ambos
+  - Límite de usos configurable (o ilimitado)
+  - Fecha de expiración opcional
+  - Activar/Desactivar cupones
+  - Eliminar cupones
+  - KPIs: Total cupones, Usos, Descuento total, Promedio/uso
+- ✅ **Reporte de Uso de Cupones**:
+  - Historial detallado de cada uso
+  - Fecha, cupón, tipo, monto original, descuento aplicado
+  - Agrupación por cupón
+- ✅ **Aplicación en Compra de Lotes**:
+  - Campo de cupón en modal de compra
+  - Validación en tiempo real
+  - Muestra descuento calculado
+  - Cupón aplicado con badge y opción de remover
+- ✅ **Límite del Fondo Doré**:
+  - Fondo total: $20,000,000 MXN
+  - Máximo lotes: 5,000
+  - Cada lote = $4,000 = 0.1% del fondo
+  - Barra de progreso de lotes vendidos
+  - Mensaje cuando se agoten: "Se ha llegado al máximo de lotes del fondo"
+
+### Módulo de Socios/Inversionistas (28-Feb-2026)
 - ✅ **Landing Page** (`/socios`): Información del programa de inversión con logo en blanco
 - ✅ **Registro de Socios** (`/socios/registro`): Con auto-registro como vendedor
   - Opción de cuenta bancaria (CLABE)

@@ -185,10 +185,21 @@ const PartnersDashboard = () => {
   };
 
   const handleBuyLots = async (lots, method = "stripe") => {
+    // Check fund availability
+    if (fundStatus && fundStatus.is_sold_out) {
+      toast.error("Se ha llegado al máximo de lotes del fondo. No hay lotes disponibles.");
+      return;
+    }
+    if (fundStatus && lots > fundStatus.available_lots) {
+      toast.error(`Solo quedan ${fundStatus.available_lots} lotes disponibles en el fondo.`);
+      return;
+    }
+
     setBuying(true);
     try {
+      const couponParam = couponValidation ? `&coupon_code=${couponCode}` : "";
       const response = await axios.post(
-        `${API}/api/partners/buy-lots?lots=${lots}&method=${method}`,
+        `${API}/api/partners/buy-lots?lots=${lots}&method=${method}${couponParam}`,
         {},
         { headers: { Authorization: `Bearer ${partnerToken}` } }
       );
@@ -197,6 +208,8 @@ const PartnersDashboard = () => {
       } else {
         toast.success("Compra registrada. Realiza el pago y sube tu comprobante.");
         setShowPaymentModal(false);
+        setCouponCode("");
+        setCouponValidation(null);
         fetchDashboard();
       }
     } catch (error) {
@@ -205,11 +218,40 @@ const PartnersDashboard = () => {
     }
   };
 
+  const validateCoupon = async () => {
+    if (!couponCode.trim()) {
+      toast.error("Ingresa un código de cupón");
+      return;
+    }
+
+    setValidatingCoupon(true);
+    try {
+      const amount = selectedLots * current_lot_price;
+      const response = await axios.post(
+        `${API}/api/coupons/validate?code=${couponCode}&valid_for=investment&amount=${amount}&tenant_id=${dashboard.partner.tenant_id}`
+      );
+      setCouponValidation(response.data);
+      toast.success(`¡Cupón válido! Descuento de ${formatCurrency(response.data.discount_amount)}`);
+    } catch (error) {
+      setCouponValidation(null);
+      toast.error(error.response?.data?.detail || "Cupón no válido");
+    } finally {
+      setValidatingCoupon(false);
+    }
+  };
+
+  const removeCoupon = () => {
+    setCouponCode("");
+    setCouponValidation(null);
+  };
+
   const openPaymentModal = (lots) => {
     setSelectedLots(lots);
     setPaymentStep("select");
     setShowPaymentModal(true);
     setReceiptFile(null);
+    setCouponCode("");
+    setCouponValidation(null);
   };
 
   const handleFileSelect = (e) => {

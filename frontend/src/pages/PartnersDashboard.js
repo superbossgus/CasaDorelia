@@ -91,6 +91,8 @@ const PartnersDashboard = () => {
       if (response.data.partner.reinvest_until_month !== undefined) {
         setReinvestUntilMonth(response.data.partner.reinvest_until_month);
       }
+      // Fetch fund status
+      fetchFundStatus();
     } catch (error) {
       if (error.response?.status === 401) {
         localStorage.removeItem("partner_token");
@@ -99,6 +101,15 @@ const PartnersDashboard = () => {
       toast.error("Error al cargar dashboard");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchFundStatus = async () => {
+    try {
+      const response = await axios.get(`${API}/api/partners/fund-status`);
+      setFundStatus(response.data);
+    } catch (error) {
+      console.error("Error fetching fund status:", error);
     }
   };
 

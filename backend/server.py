@@ -5117,6 +5117,10 @@ async def create_lot_purchase(
         "tenant_id": partner["tenant_id"],
         "lots": lots,
         "price_per_lot": current_price,
+        "original_amount": original_amount,
+        "discount_amount": discount_amount,
+        "coupon_id": coupon_id,
+        "coupon_code": coupon_code.upper() if coupon_code and coupon_id else None,
         "total_amount": total_amount,
         "participation_percent": participation,
         "payment_method": method,
@@ -5128,14 +5132,28 @@ async def create_lot_purchase(
     }
     await db.share_purchases.insert_one(purchase)
     
+    # Record coupon usage if applied
+    if coupon_id and discount_amount > 0:
+        await apply_coupon_usage(
+            coupon_id=coupon_id,
+            tenant_id=partner["tenant_id"],
+            used_for="investment",
+            original_amount=original_amount,
+            discount_amount=discount_amount,
+            partner_id=partner["id"]
+        )
+    
     # For SPEI and PayPal, just return success - user will upload receipt
     if method in ["spei", "paypal"]:
         return {
             "purchase_id": purchase_id,
             "lots": lots,
+            "original_amount": original_amount,
+            "discount_amount": discount_amount,
             "total_amount": total_amount,
             "participation_percent": participation,
             "payment_method": method,
+            "coupon_applied": coupon_id is not None,
             "message": "Compra registrada. Sube tu comprobante de pago."
         }
     

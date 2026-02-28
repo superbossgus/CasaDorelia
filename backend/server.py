@@ -5053,10 +5053,29 @@ async def get_coupon_report(current_user: dict = Depends(require_roles(["admin"]
 
 # Create checkout session for buying lots
 @api_router.post("/partners/buy-lots")
-async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: dict = Depends(get_current_partner)):
+async def create_lot_purchase(
+    lots: int, 
+    method: str = "stripe", 
+    coupon_code: str = None,
+    partner_data: dict = Depends(get_current_partner)
+):
     """Create purchase for buying lots with different payment methods"""
     if lots < 1:
         raise HTTPException(status_code=400, detail="Debe comprar al menos 1 lote")
+    
+    # Check if fund has available lots
+    available_lots = await get_available_lots()
+    if available_lots <= 0:
+        raise HTTPException(
+            status_code=400, 
+            detail="Se ha llegado al máximo de lotes del fondo. No hay lotes disponibles."
+        )
+    
+    if lots > available_lots:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Solo quedan {available_lots} lotes disponibles en el fondo."
+        )
     
     partner = await db.partners.find_one({"id": partner_data["partner_id"]}, {"_id": 0})
     if not partner:
@@ -5067,7 +5086,27 @@ async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: d
         raise HTTPException(status_code=404, detail="Negocio no encontrado")
     
     current_price = await get_current_lot_price(partner["tenant_id"])
-    total_amount = lots * current_price
+    original_amount = lots * current_price
+    total_amount = original_amount
+    discount_amount = 0
+    coupon_id = None
+    
+    # Apply coupon if provided
+    if coupon_code:
+        try:
+            coupon_result = await validate_coupon(
+                code=coupon_code,
+                valid_for="investment",
+                amount=original_amount,
+                tenant_id=partner["tenant_id"]
+            )
+            discount_amount = coupon_result["discount_amount"]
+            total_amount = coupon_result["final_amount"]
+            coupon_id = coupon_result["coupon_id"]
+        except HTTPException:
+            # Invalid coupon - continue without discount
+            pass
+    
     participation = lots * SHARE_LOT_PERCENT
     
     # Create purchase record

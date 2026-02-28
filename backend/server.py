@@ -602,6 +602,37 @@ SHARE_LOT_PERCENT = 0.1   # 0.1% per lot
 MONTHLY_RETURN_PER_LOT = 100.0  # $100 MXN per lot per month
 TOTAL_PAYMENT_MONTHS = 48  # 4 years
 
+# Fund configuration
+FUND_TOTAL_VALUE = 20000000.0  # $20,000,000 MXN total fund value
+MAX_TOTAL_LOTS = 5000  # Maximum lots available (20M / 4K = 5000)
+
+# ============== DISCOUNT COUPON MODELS ==============
+
+class CouponCreate(BaseModel):
+    code: str
+    discount_type: str  # "percent" or "fixed"
+    discount_value: float  # Percentage (0-100) or fixed amount in MXN
+    valid_for: str = "both"  # "subscription", "investment", "both"
+    max_uses: Optional[int] = None  # None = unlimited
+    expires_at: Optional[str] = None  # ISO date string
+    description: Optional[str] = None
+
+class CouponResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    tenant_id: str
+    code: str
+    discount_type: str
+    discount_value: float
+    valid_for: str
+    max_uses: Optional[int]
+    uses_count: int
+    total_discount_given: float
+    is_active: bool
+    expires_at: Optional[str]
+    description: Optional[str]
+    created_at: str
+
 class PartnerCreate(BaseModel):
     name: str
     email: EmailStr

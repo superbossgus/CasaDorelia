@@ -33,6 +33,7 @@ import PartnersLogin from "./pages/PartnersLogin";
 import PartnersDashboard from "./pages/PartnersDashboard";
 import PartnersPurchaseSuccess from "./pages/PartnersPurchaseSuccess";
 import PartnersAdmin from "./pages/PartnersAdmin";
+import CouponsAdmin from "./pages/CouponsAdmin";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {

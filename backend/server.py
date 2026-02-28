@@ -4945,7 +4945,8 @@ async def create_coupon(
     }
     
     await db.discount_coupons.insert_one(coupon_dict)
-    del coupon_dict["_id"] if "_id" in coupon_dict else None
+    if "_id" in coupon_dict:
+        del coupon_dict["_id"]
     
     return coupon_dict
 

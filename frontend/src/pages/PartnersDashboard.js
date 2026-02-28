@@ -988,16 +988,78 @@ const PartnersDashboard = () => {
                 </button>
               </div>
 
-              <div className="p-4 bg-[#0D0D0D] rounded-lg border border-[#27272A] mb-6">
+              <div className="p-4 bg-[#0D0D0D] rounded-lg border border-[#27272A] mb-4">
                 <div className="flex justify-between items-center">
-                  <span className="text-[#A1A1AA]">Total a pagar:</span>
-                  <span className="text-2xl font-bold text-[#708238]">
+                  <span className="text-[#A1A1AA]">Subtotal:</span>
+                  <span className={`text-xl font-bold ${couponValidation ? "text-[#71717A] line-through" : "text-[#708238]"}`}>
                     {formatCurrency(selectedLots * current_lot_price)} MXN
                   </span>
                 </div>
-                <p className="text-sm text-[#71717A] mt-2">
-                  {(selectedLots * 0.1).toFixed(1)}% de participación • ${selectedLots * monthly_return_per_lot}/mes
-                </p>
+                {couponValidation && (
+                  <>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-green-400 text-sm">Descuento ({couponValidation.code}):</span>
+                      <span className="text-green-400">-{formatCurrency(couponValidation.discount_amount)}</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-[#27272A]">
+                      <span className="text-white font-medium">Total a pagar:</span>
+                      <span className="text-2xl font-bold text-[#708238]">
+                        {formatCurrency(couponValidation.final_amount)} MXN
+                      </span>
+                    </div>
+                  </>
+                )}
+                {!couponValidation && (
+                  <p className="text-sm text-[#71717A] mt-2">
+                    {(selectedLots * 0.1).toFixed(1)}% de participación • ${selectedLots * monthly_return_per_lot}/mes
+                  </p>
+                )}
+              </div>
+
+              {/* Coupon Code Field */}
+              <div className="mb-6">
+                <Label className="text-[#A1A1AA] text-sm mb-2 block">¿Tienes un cupón de descuento?</Label>
+                {!couponValidation ? (
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Ticket className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#52525B]" />
+                      <Input
+                        value={couponCode}
+                        onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                        placeholder="Código de cupón"
+                        className="bg-[#0D0D0D] border-[#27272A] text-white pl-10 font-mono uppercase"
+                      />
+                    </div>
+                    <Button
+                      onClick={validateCoupon}
+                      disabled={validatingCoupon || !couponCode}
+                      variant="outline"
+                      className="border-[#708238] text-[#708238] hover:bg-[#708238]/10"
+                    >
+                      {validatingCoupon ? <Loader2 className="h-4 w-4 animate-spin" /> : "Aplicar"}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="h-5 w-5 text-green-400" />
+                      <span className="text-green-400 font-mono">{couponValidation.code}</span>
+                      <Badge className="bg-green-500/20 text-green-400">
+                        {couponValidation.discount_type === "percent" 
+                          ? `${couponValidation.discount_value}%` 
+                          : formatCurrency(couponValidation.discount_value)}
+                      </Badge>
+                    </div>
+                    <Button
+                      onClick={removeCoupon}
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-400 hover:text-red-300"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {paymentStep === "select" && (

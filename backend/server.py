@@ -4789,6 +4789,268 @@ async def update_reinvestment_settings(
     )
     return {"message": "Configuración de reinversión actualizada", "reinvest_enabled": reinvest_enabled}
 
+# ============== DISCOUNT COUPON ENDPOINTS ==============
+
+# Helper function to get total lots sold globally
+async def get_total_lots_sold():
+    """Get total lots sold across all tenants"""
+    pipeline = [
+        {"$match": {"status": "completed"}},
+        {"$group": {"_id": None, "total": {"$sum": "$lots"}}}
+    ]
+    result = await db.share_purchases.aggregate(pipeline).to_list(1)
+    return result[0]["total"] if result else 0
+
+# Helper function to get available lots
+async def get_available_lots():
+    """Get number of lots still available in the fund"""
+    total_sold = await get_total_lots_sold()
+    return MAX_TOTAL_LOTS - total_sold
+
+# Validate coupon
+@api_router.post("/coupons/validate")
+async def validate_coupon(
+    code: str,
+    valid_for: str,  # "subscription" or "investment"
+    amount: float,
+    tenant_id: str
+):
+    """Validate a coupon and return discount amount"""
+    coupon = await db.discount_coupons.find_one({
+        "code": code.upper(),
+        "tenant_id": tenant_id,
+        "is_active": True
+    }, {"_id": 0})
+    
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Cupón no válido")
+    
+    # Check if coupon is valid for this type
+    if coupon["valid_for"] != "both" and coupon["valid_for"] != valid_for:
+        raise HTTPException(status_code=400, detail=f"Este cupón no es válido para {valid_for}")
+    
+    # Check if expired
+    if coupon.get("expires_at"):
+        expires = datetime.fromisoformat(coupon["expires_at"].replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(status_code=400, detail="Este cupón ha expirado")
+    
+    # Check max uses
+    if coupon.get("max_uses") and coupon["uses_count"] >= coupon["max_uses"]:
+        raise HTTPException(status_code=400, detail="Este cupón ha alcanzado su límite de usos")
+    
+    # Calculate discount
+    if coupon["discount_type"] == "percent":
+        discount_amount = amount * (coupon["discount_value"] / 100)
+    else:  # fixed
+        discount_amount = min(coupon["discount_value"], amount)  # Can't discount more than total
+    
+    final_amount = max(0, amount - discount_amount)
+    
+    return {
+        "valid": True,
+        "coupon_id": coupon["id"],
+        "code": coupon["code"],
+        "discount_type": coupon["discount_type"],
+        "discount_value": coupon["discount_value"],
+        "discount_amount": round(discount_amount, 2),
+        "original_amount": amount,
+        "final_amount": round(final_amount, 2),
+        "description": coupon.get("description")
+    }
+
+# Apply coupon (record usage)
+async def apply_coupon_usage(coupon_id: str, tenant_id: str, used_for: str, original_amount: float, discount_amount: float, user_id: str = None, partner_id: str = None):
+    """Record coupon usage and update coupon stats"""
+    usage = {
+        "id": str(uuid.uuid4()),
+        "coupon_id": coupon_id,
+        "tenant_id": tenant_id,
+        "used_for": used_for,
+        "original_amount": original_amount,
+        "discount_amount": discount_amount,
+        "user_id": user_id,
+        "partner_id": partner_id,
+        "used_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.coupon_usages.insert_one(usage)
+    
+    # Update coupon stats
+    await db.discount_coupons.update_one(
+        {"id": coupon_id},
+        {
+            "$inc": {"uses_count": 1, "total_discount_given": discount_amount}
+        }
+    )
+
+# Get fund status (available lots)
+@api_router.get("/partners/fund-status")
+async def get_fund_status():
+    """Get current fund status including available lots"""
+    total_sold = await get_total_lots_sold()
+    available = MAX_TOTAL_LOTS - total_sold
+    
+    # Get total partners count
+    partners_count = await db.partners.count_documents({"is_active": True})
+    
+    return {
+        "fund_total_value": FUND_TOTAL_VALUE,
+        "lot_price": SHARE_LOT_PRICE,
+        "lot_percent": SHARE_LOT_PERCENT,
+        "max_total_lots": MAX_TOTAL_LOTS,
+        "total_lots_sold": total_sold,
+        "available_lots": available,
+        "fund_percentage_sold": round((total_sold / MAX_TOTAL_LOTS) * 100, 2),
+        "total_partners": partners_count,
+        "is_sold_out": available <= 0
+    }
+
+# Admin: Create coupon
+@api_router.post("/coupons")
+async def create_coupon(
+    coupon: CouponCreate,
+    current_user: dict = Depends(require_roles(["admin"]))
+):
+    """Create a new discount coupon"""
+    tenant_id = current_user["tenant_id"]
+    
+    # Check if code already exists
+    existing = await db.discount_coupons.find_one({
+        "code": coupon.code.upper(),
+        "tenant_id": tenant_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Ya existe un cupón con este código")
+    
+    # Validate discount value
+    if coupon.discount_type == "percent" and (coupon.discount_value < 0 or coupon.discount_value > 100):
+        raise HTTPException(status_code=400, detail="El porcentaje debe estar entre 0 y 100")
+    if coupon.discount_type == "fixed" and coupon.discount_value < 0:
+        raise HTTPException(status_code=400, detail="El valor del descuento no puede ser negativo")
+    
+    coupon_dict = {
+        "id": str(uuid.uuid4()),
+        "tenant_id": tenant_id,
+        "code": coupon.code.upper(),
+        "discount_type": coupon.discount_type,
+        "discount_value": coupon.discount_value,
+        "valid_for": coupon.valid_for,
+        "max_uses": coupon.max_uses,
+        "uses_count": 0,
+        "total_discount_given": 0,
+        "is_active": True,
+        "expires_at": coupon.expires_at,
+        "description": coupon.description,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.discount_coupons.insert_one(coupon_dict)
+    del coupon_dict["_id"] if "_id" in coupon_dict else None
+    
+    return coupon_dict
+
+# Admin: Get all coupons
+@api_router.get("/coupons")
+async def get_coupons(current_user: dict = Depends(require_roles(["admin"]))):
+    """Get all coupons for tenant"""
+    tenant_id = current_user["tenant_id"]
+    coupons = await db.discount_coupons.find(
+        {"tenant_id": tenant_id},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return coupons
+
+# Admin: Update coupon
+@api_router.put("/coupons/{coupon_id}")
+async def update_coupon(
+    coupon_id: str,
+    is_active: bool = None,
+    max_uses: int = None,
+    expires_at: str = None,
+    current_user: dict = Depends(require_roles(["admin"]))
+):
+    """Update coupon settings"""
+    tenant_id = current_user["tenant_id"]
+    
+    update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if is_active is not None:
+        update_data["is_active"] = is_active
+    if max_uses is not None:
+        update_data["max_uses"] = max_uses
+    if expires_at is not None:
+        update_data["expires_at"] = expires_at
+    
+    result = await db.discount_coupons.update_one(
+        {"id": coupon_id, "tenant_id": tenant_id},
+        {"$set": update_data}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Cupón no encontrado")
+    
+    return {"message": "Cupón actualizado"}
+
+# Admin: Delete coupon
+@api_router.delete("/coupons/{coupon_id}")
+async def delete_coupon(
+    coupon_id: str,
+    current_user: dict = Depends(require_roles(["admin"]))
+):
+    """Delete a coupon"""
+    tenant_id = current_user["tenant_id"]
+    
+    result = await db.discount_coupons.delete_one({
+        "id": coupon_id,
+        "tenant_id": tenant_id
+    })
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Cupón no encontrado")
+    
+    return {"message": "Cupón eliminado"}
+
+# Admin: Get coupon usage report
+@api_router.get("/coupons/report")
+async def get_coupon_report(current_user: dict = Depends(require_roles(["admin"]))):
+    """Get detailed coupon usage report"""
+    tenant_id = current_user["tenant_id"]
+    
+    # Get all coupons with usage stats
+    coupons = await db.discount_coupons.find(
+        {"tenant_id": tenant_id},
+        {"_id": 0}
+    ).to_list(100)
+    
+    # Get usage details
+    usages = await db.coupon_usages.find(
+        {"tenant_id": tenant_id},
+        {"_id": 0}
+    ).sort("used_at", -1).to_list(500)
+    
+    # Calculate totals
+    total_discount_given = sum(c.get("total_discount_given", 0) for c in coupons)
+    total_uses = sum(c.get("uses_count", 0) for c in coupons)
+    
+    # Group usages by coupon
+    usage_by_coupon = {}
+    for usage in usages:
+        coupon_id = usage["coupon_id"]
+        if coupon_id not in usage_by_coupon:
+            usage_by_coupon[coupon_id] = []
+        usage_by_coupon[coupon_id].append(usage)
+    
+    return {
+        "summary": {
+            "total_coupons": len(coupons),
+            "active_coupons": len([c for c in coupons if c.get("is_active")]),
+            "total_uses": total_uses,
+            "total_discount_given": round(total_discount_given, 2)
+        },
+        "coupons": coupons,
+        "recent_usages": usages[:50],
+        "usage_by_coupon": usage_by_coupon
+    }
+
 # Create checkout session for buying lots
 @api_router.post("/partners/buy-lots")
 async def create_lot_purchase(lots: int, method: str = "stripe", partner_data: dict = Depends(get_current_partner)):

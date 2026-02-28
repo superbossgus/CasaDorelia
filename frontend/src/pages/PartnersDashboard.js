@@ -572,24 +572,55 @@ const PartnersDashboard = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-[#A1A1AA] text-sm mb-4">
-                    Precio actual: <strong className="text-white">{formatCurrency(current_lot_price)}</strong> / lote
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[1, 3, 5, 10].map((lots) => (
-                      <Button
-                        key={lots}
-                        onClick={() => openPaymentModal(lots)}
-                        disabled={buying}
-                        variant="outline"
-                        className="bg-transparent border-[#27272A] hover:border-[#708238] hover:bg-[#708238]/10 flex-col h-auto py-3"
-                      >
-                        <span className="text-xl font-bold text-white">{lots}</span>
-                        <span className="text-xs text-[#A1A1AA]">lote{lots > 1 ? 's' : ''}</span>
-                        <span className="text-sm text-[#708238] font-bold">{formatCurrency(lots * current_lot_price)}</span>
-                      </Button>
-                    ))}
-                  </div>
+                  {/* Fund Status */}
+                  {fundStatus && (
+                    <div className="mb-4 p-3 bg-[#0D0D0D] rounded-lg border border-[#27272A]">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-[#A1A1AA]">Fondo Doré</span>
+                        <span className="text-sm text-[#708238]">
+                          {fundStatus.available_lots.toLocaleString()} / {fundStatus.max_total_lots.toLocaleString()} lotes disponibles
+                        </span>
+                      </div>
+                      <div className="w-full bg-[#27272A] rounded-full h-2">
+                        <div 
+                          className="bg-[#708238] h-2 rounded-full transition-all"
+                          style={{ width: `${fundStatus.fund_percentage_sold}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-[#71717A] mt-1">
+                        {fundStatus.fund_percentage_sold}% vendido • {formatCurrency(fundStatus.fund_total_value)} valor total del fondo
+                      </p>
+                    </div>
+                  )}
+
+                  {fundStatus?.is_sold_out ? (
+                    <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-center">
+                      <AlertTriangle className="h-8 w-8 text-red-400 mx-auto mb-2" />
+                      <p className="text-red-400 font-medium">Se ha llegado al máximo de lotes del fondo</p>
+                      <p className="text-sm text-[#A1A1AA] mt-1">No hay lotes disponibles para comprar</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-[#A1A1AA] text-sm mb-4">
+                        Precio actual: <strong className="text-white">{formatCurrency(current_lot_price)}</strong> / lote
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[1, 3, 5, 10].map((lots) => (
+                          <Button
+                            key={lots}
+                            onClick={() => openPaymentModal(lots)}
+                            disabled={buying || (fundStatus && lots > fundStatus.available_lots)}
+                            variant="outline"
+                            className="bg-transparent border-[#27272A] hover:border-[#708238] hover:bg-[#708238]/10 flex-col h-auto py-3"
+                          >
+                            <span className="text-xl font-bold text-white">{lots}</span>
+                            <span className="text-xs text-[#A1A1AA]">lote{lots > 1 ? 's' : ''}</span>
+                            <span className="text-sm text-[#708238] font-bold">{formatCurrency(lots * current_lot_price)}</span>
+                          </Button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
             </div>

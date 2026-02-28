@@ -37,6 +37,7 @@ import {
   Gift,
   UserCheck,
   TrendingUp,
+  Ticket,
 } from "lucide-react";
 import axios from "axios";
 

@@ -594,6 +594,30 @@ class ApplySalespersonDiscountRequest(BaseModel):
     sale_total: float
     sale_id: str
 
+# ============== POS ORDER MODELS ==============
+
+class POSOrderItem(BaseModel):
+    product_id: str
+    product_name: str
+    quantity: int
+    unit_price: float
+    total_price: float
+    notes: Optional[str] = None  # "sin cebolla", "sin azúcar", etc.
+    category: Optional[str] = None
+    color: Optional[str] = None
+
+class POSOrderCreate(BaseModel):
+    items: List[POSOrderItem]
+    customer_name: Optional[str] = None
+    order_number: Optional[int] = None
+    table_number: Optional[str] = None
+    order_type: str = "mostrador"  # "mostrador", "mesa", "para llevar"
+    payment_method: str = "efectivo"  # "efectivo", "tarjeta", "transferencia"
+    notes: Optional[str] = None
+
+class POSOrderUpdate(BaseModel):
+    status: str  # "pending", "preparing", "ready", "delivered", "cancelled"
+
 # ============== PARTNER/INVESTOR MODELS ==============
 
 # Investment configuration

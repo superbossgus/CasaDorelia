@@ -2957,6 +2957,254 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
     
     return SaleResponse(**sale_dict, cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida")
 
+# ============== POS (POINT OF SALE) ROUTES ==============
+
+@api_router.get("/pos/products")
+async def get_pos_products(cafeteria_id: str, current_user: dict = Depends(get_current_user)):
+    """Get products for POS display with categories and colors"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    products = await db.products.find(
+        {**tenant_filter, "is_active": True},
+        {"_id": 0}
+    ).to_list(200)
+    
+    # Get inventory for the specific cafeteria
+    inventory = await db.inventory.find(
+        {**tenant_filter, "cafeteria_id": cafeteria_id},
+        {"_id": 0}
+    ).to_list(500)
+    
+    inventory_map = {inv["product_id"]: inv["quantity"] for inv in inventory}
+    
+    # Assign colors to categories
+    category_colors = {
+        "Café": "#8B4513",
+        "Bebidas": "#4169E1",
+        "Panadería": "#DAA520",
+        "Comida": "#228B22",
+        "Postres": "#FF69B4",
+        "Otros": "#708238"
+    }
+    
+    result = []
+    for p in products:
+        stock = inventory_map.get(p["id"], 0)
+        result.append({
+            **p,
+            "stock": stock,
+            "in_stock": stock > 0,
+            "color": category_colors.get(p.get("category", "Otros"), "#708238")
+        })
+    
+    return result
+
+@api_router.post("/pos/orders")
+async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new POS order"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    # Get cafeteria from user
+    cafeteria_id = current_user.get("cafeteria_id")
+    if not cafeteria_id:
+        # Get first cafeteria for admin
+        cafeteria = await db.cafeterias.find_one(tenant_filter, {"_id": 0, "id": 1})
+        if cafeteria:
+            cafeteria_id = cafeteria["id"]
+    
+    # Generate order number for the day
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    order_count = await db.pos_orders.count_documents({
+        **tenant_filter,
+        "created_at": {"$gte": today_start.isoformat()}
+    })
+    order_number = order.order_number or (order_count + 1)
+    
+    # Calculate totals
+    subtotal = sum(item.total_price for item in order.items)
+    tax = subtotal * 0.16
+    total = subtotal + tax
+    
+    order_id = str(uuid.uuid4())
+    order_dict = {
+        "id": order_id,
+        "tenant_id": current_user["tenant_id"],
+        "cafeteria_id": cafeteria_id,
+        "order_number": order_number,
+        "items": [item.dict() for item in order.items],
+        "customer_name": order.customer_name,
+        "table_number": order.table_number,
+        "order_type": order.order_type,
+        "payment_method": order.payment_method,
+        "notes": order.notes,
+        "subtotal": subtotal,
+        "tax": tax,
+        "total": total,
+        "status": "pending",  # pending, preparing, ready, delivered, cancelled
+        "created_by": current_user.get("name", "Cajero"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "delivered_at": None
+    }
+    
+    await db.pos_orders.insert_one(order_dict)
+    
+    # Also create a sale record
+    sale_id = str(uuid.uuid4())
+    sale_items = [{
+        "product_id": item.product_id,
+        "product_name": item.product_name,
+        "quantity": item.quantity,
+        "unit_price": item.unit_price,
+        "subtotal": item.total_price
+    } for item in order.items]
+    
+    sale_dict = {
+        "id": sale_id,
+        "tenant_id": current_user["tenant_id"],
+        "cafeteria_id": cafeteria_id,
+        "items": sale_items,
+        "subtotal": subtotal,
+        "tax": tax,
+        "discount": 0,
+        "total": total,
+        "payment_method": order.payment_method,
+        "pos_order_id": order_id,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.sales.insert_one(sale_dict)
+    
+    # Deduct inventory
+    for item in order.items:
+        await db.inventory.update_one(
+            {**tenant_filter, "cafeteria_id": cafeteria_id, "product_id": item.product_id},
+            {"$inc": {"quantity": -item.quantity}}
+        )
+    
+    del order_dict["_id"] if "_id" in order_dict else None
+    return order_dict
+
+@api_router.get("/pos/orders")
+async def get_pos_orders(
+    cafeteria_id: Optional[str] = None,
+    status: Optional[str] = None,
+    today_only: bool = True,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get POS orders for kitchen display or order history"""
+    tenant_filter = get_tenant_filter(current_user)
+    query = {**tenant_filter}
+    
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    elif current_user.get("cafeteria_id"):
+        query["cafeteria_id"] = current_user["cafeteria_id"]
+    
+    if status:
+        query["status"] = status
+    
+    if today_only:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": today_start.isoformat()}
+    
+    orders = await db.pos_orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return orders
+
+@api_router.get("/pos/kitchen")
+async def get_kitchen_orders(
+    cafeteria_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get pending orders for kitchen display"""
+    tenant_filter = get_tenant_filter(current_user)
+    query = {
+        **tenant_filter,
+        "status": {"$in": ["pending", "preparing"]}
+    }
+    
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    elif current_user.get("cafeteria_id"):
+        query["cafeteria_id"] = current_user["cafeteria_id"]
+    
+    orders = await db.pos_orders.find(query, {"_id": 0}).sort("created_at", 1).to_list(50)
+    
+    # Calculate time elapsed for each order
+    now = datetime.now(timezone.utc)
+    for order in orders:
+        created = datetime.fromisoformat(order["created_at"].replace("Z", "+00:00"))
+        elapsed = (now - created).total_seconds()
+        order["elapsed_seconds"] = elapsed
+        order["elapsed_minutes"] = round(elapsed / 60, 1)
+        
+        # Determine color based on time
+        if elapsed < 120:  # < 2 minutes
+            order["time_status"] = "green"
+        elif elapsed < 240:  # 2-4 minutes
+            order["time_status"] = "yellow"
+        elif elapsed < 300:  # 4-5 minutes
+            order["time_status"] = "red"
+        else:  # > 5 minutes
+            order["time_status"] = "critical"  # blink + alarm
+    
+    return orders
+
+@api_router.put("/pos/orders/{order_id}")
+async def update_pos_order(
+    order_id: str,
+    update: POSOrderUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update POS order status"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    update_data = {
+        "status": update.status,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    if update.status == "delivered":
+        update_data["delivered_at"] = datetime.now(timezone.utc).isoformat()
+    
+    result = await db.pos_orders.update_one(
+        {"id": order_id, **tenant_filter},
+        {"$set": update_data}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    
+    return {"message": "Orden actualizada", "status": update.status}
+
+@api_router.delete("/pos/orders/{order_id}")
+async def cancel_pos_order(
+    order_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Cancel a POS order"""
+    tenant_filter = get_tenant_filter(current_user)
+    
+    order = await db.pos_orders.find_one({"id": order_id, **tenant_filter}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    
+    if order["status"] == "delivered":
+        raise HTTPException(status_code=400, detail="No se puede cancelar una orden entregada")
+    
+    # Restore inventory
+    for item in order["items"]:
+        await db.inventory.update_one(
+            {**tenant_filter, "cafeteria_id": order["cafeteria_id"], "product_id": item["product_id"]},
+            {"$inc": {"quantity": item["quantity"]}}
+        )
+    
+    await db.pos_orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {"message": "Orden cancelada"}
+
 # ============== DASHBOARD / REPORTS ROUTES ==============
 
 @api_router.get("/dashboard/stats", response_model=DashboardStats)

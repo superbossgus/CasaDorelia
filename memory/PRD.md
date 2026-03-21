@@ -7,7 +7,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 28 de Enero, 2026
 
 ## Última Actualización
-28 de Febrero, 2026
+1 de Marzo, 2026
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -24,7 +24,7 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - **Frontend**: React 19 + Tailwind CSS + Shadcn UI + Recharts
 - **Backend**: FastAPI + Python
 - **Base de Datos**: MongoDB
-- **Autenticación**: JWT con soporte multi-tenant
+- **Autenticación**: JWT con soporte multi-tenant + Google OAuth (Emergent Auth)
 - **Pagos**: Stripe (emergentintegrations)
 - **Notificaciones**: Twilio WhatsApp API
 - **Email**: Resend (recuperación de contraseña)
@@ -39,10 +39,12 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 
 ### Core
 - ✅ Autenticación JWT con roles
+- ✅ **Google OAuth** (Emergent Auth) - Login con cuenta de Google (1 de Marzo, 2026)
 - ✅ Dashboard con KPIs en tiempo real
 - ✅ Gráficos de tendencias (últimos 7 días)
 - ✅ Comparativas entre cafeterías
 - ✅ Tema oscuro (negro #0D0D0D + verde aceituna #708238)
+- ✅ **Banner "Made with Emergent" eliminado** (1 de Marzo, 2026)
 
 ### Módulos
 - ✅ **Ventas**: Registro con múltiples productos, métodos de pago (Efectivo/Tarjeta/Clip)
@@ -251,6 +253,9 @@ El seed data genera:
 
 ## Endpoints API Principales
 - `POST /api/auth/login` - Autenticación
+- `POST /api/auth/google/session` - Intercambio de session_id de Emergent OAuth
+- `POST /api/auth/google/logout` - Cerrar sesión de Google
+- `GET /api/auth/me` - Obtener usuario actual
 - `POST /api/auth/forgot-password` - Solicitar recuperación de contraseña
 - `POST /api/auth/reset-password` - Restablecer contraseña con código
 - `GET /api/dashboard/stats` - Estadísticas dashboard

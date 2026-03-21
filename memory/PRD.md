@@ -1,13 +1,19 @@
-# Doré - Sistema de Gestión de Cafeterías
+# Casa Dorelia - Sistema de Gestión
 
 ## Resumen del Proyecto
-Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant**. Permite controlar ventas, inventario, costos, menús y utilidad. Diseñado para vender a múltiples negocios de cafeterías.
+Sistema web integral para gestión de negocios con modelo **SaaS multi-tenant**. Permite controlar ventas, inventario, costos, menús y utilidad. Diseñado para vender a múltiples negocios.
 
 ## Fecha de Creación
 28 de Enero, 2026
 
 ## Última Actualización
 1 de Marzo, 2026
+
+## Branding
+- **Nombre**: Casa Dorelia
+- **Slogan**: Sabores del Mundo
+- **Logo URL**: https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif
+- **Nota Logo**: El logo tiene fondo blanco, se muestra con `bg-white rounded-lg p-2` sobre el tema oscuro
 
 ## Modelo de Negocio: SaaS Multi-Tenant
 - **Prueba gratuita**: 7 días
@@ -42,9 +48,10 @@ Sistema web integral para gestión de cafeterías con modelo **SaaS multi-tenant
 - ✅ **Google OAuth** (Emergent Auth) - Login con cuenta de Google (1 de Marzo, 2026)
 - ✅ Dashboard con KPIs en tiempo real
 - ✅ Gráficos de tendencias (últimos 7 días)
-- ✅ Comparativas entre cafeterías
+- ✅ Comparativas entre sucursales
 - ✅ Tema oscuro (negro #0D0D0D + verde aceituna #708238)
 - ✅ **Banner "Made with Emergent" eliminado** (1 de Marzo, 2026)
+- ✅ **Rebranding a Casa Dorelia** - Nuevo logo y nombre (1 de Marzo, 2026)
 
 ### Módulos
 - ✅ **Ventas**: Registro con múltiples productos, métodos de pago (Efectivo/Tarjeta/Clip)

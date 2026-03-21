@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import Login from "./pages/Login";
@@ -34,6 +34,7 @@ import PartnersDashboard from "./pages/PartnersDashboard";
 import PartnersPurchaseSuccess from "./pages/PartnersPurchaseSuccess";
 import PartnersAdmin from "./pages/PartnersAdmin";
 import CouponsAdmin from "./pages/CouponsAdmin";
+import AuthCallback from "./pages/AuthCallback";
 import Layout from "./components/Layout";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -63,159 +64,175 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
   return children;
 };
 
+// AppRouter component to handle OAuth callback detection
+const AppRouter = () => {
+  const location = useLocation();
+  
+  // CRITICAL: Check URL fragment (not query params) for session_id
+  // This must be done synchronously during render, NOT in useEffect
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  if (location.hash?.includes('session_id=')) {
+    return <AuthCallback />;
+  }
+  
+  return (
+    <Routes>
+      {/* ========== CUSTOMER ROUTES (Public) ========== */}
+      <Route path="/" element={<CustomerLanding />} />
+      <Route path="/loyalty/login" element={<LoyaltyLogin />} />
+      <Route path="/loyalty/register" element={<LoyaltyRegister />} />
+      <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
+      
+      {/* ========== PARTNER/INVESTOR ROUTES (Public) ========== */}
+      <Route path="/socios" element={<PartnersLanding />} />
+      <Route path="/socios/registro" element={<PartnersRegister />} />
+      <Route path="/socios/login" element={<PartnersLogin />} />
+      <Route path="/socios/dashboard" element={<PartnersDashboard />} />
+      <Route path="/socios/success" element={<PartnersPurchaseSuccess />} />
+      
+      {/* ========== BUSINESS/ADMIN ROUTES ========== */}
+      <Route path="/admin" element={<Login />} />
+      <Route path="/admin/forgot-password" element={<ForgotPassword />} />
+      <Route path="/registro-negocio" element={<Landing />} />
+      
+      {/* Legacy route redirect */}
+      <Route path="/login" element={<Navigate to="/admin" replace />} />
+      <Route path="/forgot-password" element={<Navigate to="/admin/forgot-password" replace />} />
+      
+      <Route path="/subscription" element={
+        <ProtectedRoute>
+          <Subscription />
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/subscription/success" element={
+        <ProtectedRoute>
+          <SubscriptionSuccess />
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/superadmin" element={
+        <ProtectedRoute allowedRoles={["superadmin"]}>
+          <SuperAdmin />
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/dashboard" element={
+        <ProtectedRoute>
+          <Layout><Dashboard /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/sales" element={
+        <ProtectedRoute>
+          <Layout><Sales /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/inventory" element={
+        <ProtectedRoute>
+          <Layout><Inventory /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/products" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Products /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/ingredients" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Ingredients /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/ingredient-inventory" element={
+        <ProtectedRoute>
+          <Layout><IngredientInventory /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/recipes" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Recipes /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/suppliers" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Suppliers /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/purchases" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Purchases /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/reports" element={
+        <ProtectedRoute allowedRoles={["admin", "gerente"]}>
+          <Layout><Reports /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/users" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><Users /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/cafeterias" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><Cafeterias /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/whatsapp-alerts" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><WhatsAppAlerts /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/business-settings" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><BusinessSettings /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/loyalty-admin" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><LoyaltyAdmin /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/salespeople" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><SalespeopleAdmin /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/partners-admin" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><PartnersAdmin /></Layout>
+        </ProtectedRoute>
+      } />
+      
+      <Route path="/coupons" element={
+        <ProtectedRoute allowedRoles={["admin"]}>
+          <Layout><CouponsAdmin /></Layout>
+        </ProtectedRoute>
+      } />
+    </Routes>
+  );
+};
+
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <Routes>
-          {/* ========== CUSTOMER ROUTES (Public) ========== */}
-          <Route path="/" element={<CustomerLanding />} />
-          <Route path="/loyalty/login" element={<LoyaltyLogin />} />
-          <Route path="/loyalty/register" element={<LoyaltyRegister />} />
-          <Route path="/loyalty/rewards" element={<LoyaltyRewards />} />
-          
-          {/* ========== PARTNER/INVESTOR ROUTES (Public) ========== */}
-          <Route path="/socios" element={<PartnersLanding />} />
-          <Route path="/socios/registro" element={<PartnersRegister />} />
-          <Route path="/socios/login" element={<PartnersLogin />} />
-          <Route path="/socios/dashboard" element={<PartnersDashboard />} />
-          <Route path="/socios/success" element={<PartnersPurchaseSuccess />} />
-          
-          {/* ========== BUSINESS/ADMIN ROUTES ========== */}
-          <Route path="/admin" element={<Login />} />
-          <Route path="/admin/forgot-password" element={<ForgotPassword />} />
-          <Route path="/registro-negocio" element={<Landing />} />
-          
-          {/* Legacy route redirect */}
-          <Route path="/login" element={<Navigate to="/admin" replace />} />
-          <Route path="/forgot-password" element={<Navigate to="/admin/forgot-password" replace />} />
-          
-          <Route path="/subscription" element={
-            <ProtectedRoute>
-              <Subscription />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/subscription/success" element={
-            <ProtectedRoute>
-              <SubscriptionSuccess />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/superadmin" element={
-            <ProtectedRoute allowedRoles={["superadmin"]}>
-              <SuperAdmin />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/dashboard" element={
-            <ProtectedRoute>
-              <Layout><Dashboard /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/sales" element={
-            <ProtectedRoute>
-              <Layout><Sales /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/inventory" element={
-            <ProtectedRoute>
-              <Layout><Inventory /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/products" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Products /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/ingredients" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Ingredients /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/ingredient-inventory" element={
-            <ProtectedRoute>
-              <Layout><IngredientInventory /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/recipes" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Recipes /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/suppliers" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Suppliers /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/purchases" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Purchases /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/reports" element={
-            <ProtectedRoute allowedRoles={["admin", "gerente"]}>
-              <Layout><Reports /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/users" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><Users /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/cafeterias" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><Cafeterias /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/whatsapp-alerts" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><WhatsAppAlerts /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/business-settings" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><BusinessSettings /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/loyalty-admin" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><LoyaltyAdmin /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/salespeople" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><SalespeopleAdmin /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/partners-admin" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><PartnersAdmin /></Layout>
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/coupons" element={
-            <ProtectedRoute allowedRoles={["admin"]}>
-              <Layout><CouponsAdmin /></Layout>
-            </ProtectedRoute>
-          } />
-        </Routes>
+        <AppRouter />
         <Toaster 
           position="top-right" 
           toastOptions={{

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Form, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Response, Form, Request, Cookie
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -23,6 +23,7 @@ from emergentintegrations.payments.stripe.checkout import StripeCheckout, Checko
 import resend
 import asyncio
 import secrets
+import httpx
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -186,6 +187,27 @@ class PasswordResetVerify(BaseModel):
 class PasswordResetResponse(BaseModel):
     message: str
     success: bool
+
+# ============== GOOGLE OAUTH MODELS ==============
+
+class GoogleSessionRequest(BaseModel):
+    session_id: str
+
+class GoogleUserResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    role: str
+    cafeteria_id: Optional[str] = None
+    is_active: bool = True
+    tenant_id: Optional[str] = None
+    is_new_user: bool = False
+
+class GoogleAuthResponse(BaseModel):
+    token: str
+    user: GoogleUserResponse
 
 class CafeteriaBase(BaseModel):
     name: str
@@ -1328,6 +1350,151 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return UserResponse(**user)
+
+# ============== GOOGLE OAUTH ROUTES ==============
+
+@api_router.post("/auth/google/session", response_model=GoogleAuthResponse)
+async def google_auth_session(request: GoogleSessionRequest, response: Response):
+    """
+    Exchange Emergent Auth session_id for user data and create local session.
+    REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    """
+    try:
+        # Call Emergent Auth to get session data
+        async with httpx.AsyncClient() as client:
+            auth_response = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": request.session_id},
+                timeout=30.0
+            )
+        
+        if auth_response.status_code != 200:
+            logger.error(f"Emergent Auth failed: {auth_response.status_code} - {auth_response.text}")
+            raise HTTPException(status_code=401, detail="Sesión de Google inválida o expirada")
+        
+        google_data = auth_response.json()
+        logger.info(f"Google auth data received for: {google_data.get('email')}")
+        
+        email = google_data.get("email")
+        name = google_data.get("name", email.split("@")[0])
+        picture = google_data.get("picture")
+        session_token = google_data.get("session_token")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="No se pudo obtener el email de Google")
+        
+        # Check if user exists
+        existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+        is_new_user = False
+        
+        if existing_user:
+            # Update user with Google info if needed
+            update_data = {"google_picture": picture}
+            if not existing_user.get("name") or existing_user.get("name") == email.split("@")[0]:
+                update_data["name"] = name
+            
+            await db.users.update_one(
+                {"email": email},
+                {"$set": update_data}
+            )
+            
+            user_id = existing_user["id"]
+            role = existing_user.get("role", UserRole.ADMIN)
+            cafeteria_id = existing_user.get("cafeteria_id")
+            tenant_id = existing_user.get("tenant_id")
+            is_active = existing_user.get("is_active", True)
+            final_name = existing_user.get("name", name)
+            
+            if not is_active:
+                raise HTTPException(status_code=401, detail="Usuario desactivado")
+        else:
+            # Create new user with Google auth (as admin of a new tenant-less account)
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            role = UserRole.ADMIN
+            cafeteria_id = None
+            tenant_id = None
+            is_active = True
+            is_new_user = True
+            final_name = name
+            
+            new_user = {
+                "id": user_id,
+                "email": email,
+                "name": name,
+                "role": role,
+                "cafeteria_id": None,
+                "tenant_id": None,
+                "is_active": True,
+                "google_picture": picture,
+                "auth_provider": "google",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.users.insert_one(new_user)
+            logger.info(f"New Google user created: {email}")
+        
+        # Store Google session token for logout purposes
+        session_expires = datetime.now(timezone.utc) + timedelta(days=7)
+        await db.google_sessions.delete_many({"user_id": user_id})
+        await db.google_sessions.insert_one({
+            "user_id": user_id,
+            "session_token": session_token,
+            "expires_at": session_expires.isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        
+        # Create our JWT token
+        token = create_token(user_id, email, role, cafeteria_id, tenant_id)
+        
+        # Set httpOnly cookie with session_token
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=True,
+            samesite="none",
+            path="/",
+            max_age=7 * 24 * 60 * 60  # 7 days
+        )
+        
+        return GoogleAuthResponse(
+            token=token,
+            user=GoogleUserResponse(
+                id=user_id,
+                email=email,
+                name=final_name,
+                picture=picture,
+                role=role,
+                cafeteria_id=cafeteria_id,
+                is_active=is_active,
+                tenant_id=tenant_id,
+                is_new_user=is_new_user
+            )
+        )
+        
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is (don't wrap them)
+        raise
+    except httpx.RequestError as e:
+        logger.error(f"HTTP error calling Emergent Auth: {e}")
+        raise HTTPException(status_code=503, detail="Error al conectar con el servicio de autenticación")
+    except Exception as e:
+        logger.error(f"Google auth error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/auth/google/logout")
+async def google_logout(response: Response, session_token: Optional[str] = Cookie(default=None)):
+    """Logout from Google session"""
+    if session_token:
+        await db.google_sessions.delete_many({"session_token": session_token})
+    
+    response.delete_cookie(
+        key="session_token",
+        path="/",
+        secure=True,
+        samesite="none"
+    )
+    
+    return {"message": "Sesión cerrada correctamente", "success": True}
 
 # ============== PASSWORD RECOVERY ROUTES ==============
 
@@ -3081,7 +3248,8 @@ async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(g
             {"$inc": {"quantity": -item.quantity}}
         )
     
-    del order_dict["_id"] if "_id" in order_dict else None
+    if "_id" in order_dict:
+        del order_dict["_id"]
     return order_dict
 
 @api_router.get("/pos/orders")

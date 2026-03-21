@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import axios from "axios";
 
 const AuthContext = createContext(null);
@@ -10,22 +10,29 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem("token"));
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const initAuth = async () => {
-      if (token) {
-        try {
-          axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-          const response = await axios.get(`${API}/auth/me`);
-          setUser(response.data);
-        } catch (error) {
-          console.error("Auth error:", error);
-          logout();
-        }
+  const checkAuth = useCallback(async () => {
+    if (token) {
+      try {
+        axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+        const response = await axios.get(`${API}/auth/me`);
+        setUser(response.data);
+      } catch (error) {
+        console.error("Auth error:", error);
+        logout();
       }
-      setLoading(false);
-    };
-    initAuth();
+    }
+    setLoading(false);
   }, [token]);
+
+  useEffect(() => {
+    // CRITICAL: If returning from OAuth callback, skip the /me check.
+    // AuthCallback will exchange the session_id and establish the session first.
+    if (window.location.hash?.includes('session_id=')) {
+      setLoading(false);
+      return;
+    }
+    checkAuth();
+  }, [checkAuth]);
 
   const login = async (email, password) => {
     const response = await axios.post(`${API}/auth/login`, { email, password });
@@ -51,7 +58,22 @@ export const AuthProvider = ({ children }) => {
     return newUser;
   };
 
-  const logout = () => {
+  // Function to set user after Google OAuth
+  const setGoogleUser = (userData, newToken) => {
+    localStorage.setItem("token", newToken);
+    axios.defaults.headers.common["Authorization"] = `Bearer ${newToken}`;
+    setToken(newToken);
+    setUser(userData);
+  };
+
+  const logout = async () => {
+    // If user was authenticated via Google, also logout from Google session
+    try {
+      await axios.post(`${API}/auth/google/logout`, {}, { withCredentials: true });
+    } catch (error) {
+      // Ignore errors - just clean up locally
+    }
+    
     localStorage.removeItem("token");
     delete axios.defaults.headers.common["Authorization"];
     setToken(null);
@@ -71,6 +93,7 @@ export const AuthProvider = ({ children }) => {
       login, 
       register, 
       logout,
+      setGoogleUser,
       isAdmin,
       isGerente,
       isCajero,

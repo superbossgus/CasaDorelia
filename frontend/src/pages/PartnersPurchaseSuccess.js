@@ -55,7 +55,7 @@ const PartnersPurchaseSuccess = () => {
           </h1>
           
           <p className="text-[#A1A1AA] mb-6">
-            Tu inversión ha sido procesada correctamente. Ahora eres parte de la familia Doré.
+            Tu inversión ha sido procesada correctamente. Ahora eres parte de la familia Casa Dorelia.
           </p>
           
           <div className="bg-[#0D0D0D] p-4 rounded-lg border border-[#27272A] mb-6">

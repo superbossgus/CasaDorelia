@@ -75,10 +75,12 @@ const Landing = () => {
       <header className="border-b border-[#27272A] bg-[#0D0D0D]/95 backdrop-blur sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[#708238] flex items-center justify-center">
-              <Coffee className="h-6 w-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold text-white font-manrope">Doré</span>
+            <img 
+              src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+              alt="Casa Dorelia" 
+              className="h-10 w-auto bg-white rounded-md p-1"
+            />
+            <span className="text-xl font-bold text-white font-manrope">Casa Dorelia</span>
           </div>
           <div className="flex items-center gap-4">
             <Link to="/login">
@@ -301,7 +303,7 @@ const Landing = () => {
       {/* Footer */}
       <footer className="border-t border-[#27272A] py-8 mt-16">
         <div className="container mx-auto px-4 text-center text-[#71717A]">
-          <p>© 2026 Doré. Sistema de Gestión para Cafeterías.</p>
+          <p>© 2026 Casa Dorelia. Sabores del Mundo.</p>
         </div>
       </footer>
     </div>

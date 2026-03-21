@@ -19,13 +19,10 @@ const CustomerLanding = () => {
         <div className="relative z-10 max-w-4xl mx-auto px-4 pt-16 pb-24 text-center">
           <div className="flex items-center justify-center gap-3 mb-6">
             <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-              alt="Doré" 
-              className="h-16 w-auto"
+              src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+              alt="Casa Dorelia" 
+              className="h-20 w-auto bg-white rounded-lg p-2"
             />
-            <h1 className="font-manrope text-4xl md:text-5xl font-bold text-white">
-              Le Pain Doré
-            </h1>
           </div>
           
           <p className="text-xl md:text-2xl text-[#A1A1AA] mb-4">
@@ -249,10 +246,10 @@ const CustomerLanding = () => {
         <div className="max-w-3xl mx-auto px-4 text-center">
           <div className="flex items-center justify-center gap-3 mb-4">
             <TrendingUp className="h-8 w-8 text-[#708238]" />
-            <h2 className="text-xl font-bold text-white">¿Quieres invertir en Doré?</h2>
+            <h2 className="text-xl font-bold text-white">¿Quieres invertir en Casa Dorelia?</h2>
           </div>
           <p className="text-[#A1A1AA] mb-4">
-            Conviértete en socio inversionista del Fondo Doré y recibe rendimientos mensuales garantizados
+            Conviértete en socio inversionista del Fondo Casa Dorelia y recibe rendimientos mensuales garantizados
           </p>
           <Link to="/socios">
             <Button 
@@ -271,11 +268,11 @@ const CustomerLanding = () => {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <img 
-                src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-                alt="Doré" 
-                className="h-8 w-auto"
+                src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+                alt="Casa Dorelia" 
+                className="h-10 w-auto bg-white rounded-md p-1"
               />
-              <span className="text-white font-manrope font-bold">Le Pain Doré</span>
+              <span className="text-white font-manrope font-bold">Casa Dorelia</span>
             </div>
             <div className="flex gap-6 text-sm text-[#71717A]">
               <Link to="/socios" className="hover:text-white transition-colors">

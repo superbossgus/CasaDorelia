@@ -24,8 +24,8 @@ import {
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
-// Logo de Doré en blanco para fondos oscuros
-const DORE_LOGO_WHITE = "https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png";
+// Logo de Casa Dorelia
+const DORELIA_LOGO = "https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif";
 
 // Datos de cuenta SPEI
 const SPEI_DATA = {
@@ -345,9 +345,9 @@ const PartnersDashboard = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <img 
-                src={DORE_LOGO_WHITE}
-                alt="Doré" 
-                className="h-10 w-auto brightness-0 invert"
+                src={DORELIA_LOGO}
+                alt="Casa Dorelia" 
+                className="h-12 w-auto bg-white rounded-md p-1"
               />
               <div>
                 <p className="text-[#A1A1AA] text-sm">Portal de Socios</p>
@@ -422,7 +422,7 @@ const PartnersDashboard = () => {
                     <span className="text-sm text-[#A1A1AA]">Participación</span>
                   </div>
                   <p className="text-2xl font-bold text-[#708238]">{formatPercent(partner.participation_percent)}</p>
-                  <p className="text-xs text-[#A1A1AA]">del Fondo Doré</p>
+                  <p className="text-xs text-[#A1A1AA]">del Fondo Casa Dorelia</p>
                 </CardContent>
               </Card>
 
@@ -576,7 +576,7 @@ const PartnersDashboard = () => {
                   {fundStatus && (
                     <div className="mb-4 p-3 bg-[#0D0D0D] rounded-lg border border-[#27272A]">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-[#A1A1AA]">Fondo Doré</span>
+                        <span className="text-sm text-[#A1A1AA]">Fondo Casa Dorelia</span>
                         <span className="text-sm text-[#708238]">
                           {fundStatus.available_lots.toLocaleString()} / {fundStatus.max_total_lots.toLocaleString()} lotes disponibles
                         </span>

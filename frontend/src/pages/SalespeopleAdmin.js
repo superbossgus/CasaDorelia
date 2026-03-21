@@ -160,12 +160,12 @@ const SalespeopleAdmin = () => {
   };
 
   const handleShare = async () => {
-    const shareText = `¡Usa mi código ${selectedSalesperson?.share_code} para obtener 10% de descuento en Le Pain Doré!`;
+    const shareText = `¡Usa mi código ${selectedSalesperson?.share_code} para obtener 10% de descuento en Casa Dorelia!`;
     
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "Descuento Le Pain Doré",
+          title: "Descuento Casa Dorelia",
           text: shareText,
           url: window.location.origin
         });

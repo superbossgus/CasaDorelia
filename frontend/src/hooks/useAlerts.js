@@ -41,17 +41,17 @@ export const useAlerts = (pollInterval = 300000) => { // 5 minutes default
 
   const sendNotification = (alerts) => {
     if (alerts.length === 1) {
-      new Notification("⚠️ Alerta Crítica - Doré", {
+      new Notification("⚠️ Alerta Crítica - Casa Dorelia", {
         body: `${alerts[0].ingredient_name} en ${alerts[0].cafeteria_name} tiene stock crítico (${alerts[0].days_until_stockout} días restantes)`,
         icon: "/favicon.ico",
-        tag: "dore-alert",
+        tag: "dorelia-alert",
         requireInteraction: true
       });
     } else {
-      new Notification("🚨 Alertas Críticas - Doré", {
+      new Notification("🚨 Alertas Críticas - Casa Dorelia", {
         body: `${alerts.length} ingredientes con stock crítico requieren atención`,
         icon: "/favicon.ico",
-        tag: "dore-alert",
+        tag: "dorelia-alert",
         requireInteraction: true
       });
     }

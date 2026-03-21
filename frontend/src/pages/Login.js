@@ -102,16 +102,13 @@ const Login = () => {
         <div className="relative z-10 flex flex-col justify-end p-12 text-white">
           <div className="flex items-center gap-4 mb-4 animate-fade-in">
             <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-              alt="Doré" 
-              className="h-16 w-auto"
+              src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+              alt="Casa Dorelia" 
+              className="h-20 w-auto bg-white rounded-lg p-2"
             />
-            <h1 className="font-manrope text-5xl font-bold">
-              Doré
-            </h1>
           </div>
           <p className="text-lg text-[#A1A1AA] max-w-md animate-fade-in stagger-1">
-            Sistema integral de gestión para tus cafeterías. Controla ventas, inventario, costos y más.
+            Sistema integral de gestión para tu negocio. Controla ventas, inventario, costos y más.
           </p>
         </div>
       </div>
@@ -122,13 +119,10 @@ const Login = () => {
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center mb-8">
             <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-              alt="Doré" 
-              className="h-12 w-auto mr-3"
+              src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+              alt="Casa Dorelia" 
+              className="h-16 w-auto bg-white rounded-lg p-2"
             />
-            <h1 className="font-manrope text-3xl font-bold text-white">
-              Doré
-            </h1>
           </div>
 
           <Card className="bg-[#161616] border-[#27272A] animate-fade-in">

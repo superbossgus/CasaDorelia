@@ -121,7 +121,7 @@ const SuperAdmin = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-white font-manrope">Panel Super Admin</h1>
-              <p className="text-xs text-[#71717A]">Doré SaaS Management</p>
+              <p className="text-xs text-[#71717A]">Casa Dorelia SaaS Management</p>
             </div>
           </div>
           <div className="flex items-center gap-4">

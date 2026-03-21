@@ -163,11 +163,11 @@ const Layout = ({ children }) => {
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
             <img 
-              src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-              alt="Doré" 
-              className="h-8 w-auto"
+              src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+              alt="Casa Dorelia" 
+              className="h-8 w-auto bg-white rounded-md p-1"
             />
-            <span className="font-manrope font-bold text-white">Doré</span>
+            <span className="font-manrope font-bold text-white">Casa Dorelia</span>
           </div>
           <Button
             variant="ghost"
@@ -207,16 +207,16 @@ const Layout = ({ children }) => {
               />
             ) : (
               <img 
-                src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-                alt="Doré" 
-                className="h-10 w-auto"
+                src="https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif" 
+                alt="Casa Dorelia" 
+                className="h-10 w-auto bg-white rounded-md p-1"
               />
             )}
             <div>
               <h1 className="font-manrope font-bold text-xl text-white">
-                {tenantInfo?.business_name || "Doré"}
+                {tenantInfo?.business_name || "Casa Dorelia"}
               </h1>
-              <p className="text-xs text-[#71717A]">Sistema de Gestión</p>
+              <p className="text-xs text-[#71717A]">Sabores del Mundo</p>
             </div>
           </div>
 

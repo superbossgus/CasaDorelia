@@ -7,8 +7,8 @@ import {
 } from "lucide-react";
 
 const PartnersLanding = () => {
-  // Logo de Doré en blanco para fondos oscuros
-  const DORE_LOGO_WHITE = "https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png";
+  // Logo de Casa Dorelia
+  const DORELIA_LOGO = "https://customer-assets.emergentagent.com/job_7145b8e1-c9e5-49df-84ae-20468b9e9921/artifacts/pn775b8w_IMG_0994.gif";
   
   return (
     <div className="min-h-screen bg-[#0D0D0D]">
@@ -25,17 +25,17 @@ const PartnersLanding = () => {
         <div className="relative z-10 max-w-5xl mx-auto px-4 pt-16 pb-24 text-center">
           <div className="flex items-center justify-center gap-3 mb-6">
             <img 
-              src={DORE_LOGO_WHITE}
-              alt="Doré" 
-              className="h-14 w-auto brightness-0 invert"
+              src={DORELIA_LOGO}
+              alt="Casa Dorelia" 
+              className="h-20 w-auto bg-white rounded-lg p-2"
             />
-            <h1 className="font-manrope text-4xl md:text-5xl font-bold text-white">
-              Socios Doré
-            </h1>
           </div>
+          <h1 className="font-manrope text-3xl md:text-4xl font-bold text-white mb-4">
+            Socios Casa Dorelia
+          </h1>
           
           <p className="text-xl md:text-2xl text-[#A1A1AA] mb-4">
-            Invierte en el Fondo Doré
+            Invierte en el Fondo Casa Dorelia
           </p>
           
           <p className="text-[#708238] text-lg mb-10 max-w-2xl mx-auto">
@@ -188,7 +188,7 @@ const PartnersLanding = () => {
           {[
             { icon: DollarSign, title: "Rendimientos Garantizados", desc: "$100 MXN mensuales por lote durante 48 meses" },
             { icon: TrendingUp, title: "Plusvalía", desc: "El valor de tu participación puede aumentar con el tiempo" },
-            { icon: Shield, title: "Inversión Segura", desc: "Respaldada por el crecimiento real del Fondo Doré" },
+            { icon: Shield, title: "Inversión Segura", desc: "Respaldada por el crecimiento real del Fondo Casa Dorelia" },
             { icon: Percent, title: "Código de Descuento", desc: "Recibe un código QR para obtener 10% de descuento y comisiones por referidos" },
             { icon: Clock, title: "Pagos Puntuales", desc: "Depósitos directos a tu cuenta bancaria cada mes" },
             { icon: CheckCircle2, title: "Transparencia Total", desc: "Accede a tu dashboard para ver el estado de tu inversión" },
@@ -233,11 +233,11 @@ const PartnersLanding = () => {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <img 
-                src="https://customer-assets.emergentagent.com/job_cafe-dashboard-28/artifacts/mp6st7i6_Logotipo%2003.png" 
-                alt="Doré" 
-                className="h-8 w-auto"
+                src={DORELIA_LOGO}
+                alt="Casa Dorelia" 
+                className="h-10 w-auto bg-white rounded-md p-1"
               />
-              <span className="text-white font-manrope font-bold">Le Pain Doré</span>
+              <span className="text-white font-manrope font-bold">Casa Dorelia</span>
             </div>
             <div className="flex gap-6 text-sm text-[#71717A]">
               <Link to="/" className="hover:text-white transition-colors">

@@ -11,15 +11,16 @@ incluye.
 
 ## Configuracion (una vez por maquina)
 
-`server.py` exige `MONGO_URL`, `DB_NAME` y `JWT_SECRET`; sin cualquiera de las
-tres no arranca. Van en `backend/.env`, que **no se versiona** (`.gitignore`
-cubre `.env`, `.env.*` y `*.env`, asi que tampoco se puede dejar un
-`.env.example` — por eso se documenta aqui):
+`server.py` exige `MONGO_URL`, `DB_NAME`, `JWT_SECRET` y `CORS_ORIGINS`; sin
+cualquiera de las cuatro no arranca. Van en `backend/.env`, que **no se
+versiona** (`.gitignore` cubre `.env`, `.env.*` y `*.env`, asi que tampoco se
+puede dejar un `.env.example` — por eso se documenta aqui):
 
 ```
 MONGO_URL=mongodb://127.0.0.1:27017
 DB_NAME=casa_dorelia
 JWT_SECRET=<64 caracteres, generados; ver abajo>
+CORS_ORIGINS=http://localhost:3000
 ```
 
 ### `JWT_SECRET`: la llave de firma de las sesiones
@@ -52,6 +53,54 @@ La llave de los entornos del grupo vive en el almacen de secretos de Paperclip
 en un comentario de tarea. **Rotarla invalida toda sesion emitida con la
 anterior** — eso es lo que se busca cuando la anterior quedo expuesta, y es
 gratis mientras la app no este desplegada.
+
+### `CORS_ORIGINS`: quien puede llamar al API con la sesion del usuario
+
+La lista exacta de origenes del frontend, separados por coma. Un origen es
+**esquema + host (+ puerto si no es el del esquema)** y nada mas:
+
+```
+CORS_ORIGINS=http://localhost:3000                       # desarrollo
+CORS_ORIGINS=https://app.casadorelia.mx                  # un deploy
+CORS_ORIGINS=https://app.casadorelia.mx,http://localhost:3000
+```
+
+El valor de desarrollo es `http://localhost:3000` porque el frontend se sirve con
+`craco start` (puerto 3000 por omision). El valor del deploy se llena el dia que
+exista el dominio; hoy no hay uno (el deploy de Emergent esta apagado).
+
+**No puede ser `*`, y eso es un error de arranque, no una advertencia.** Se
+esperaria que con `*` el navegador descartara la respuesta por traer
+credenciales — molesto pero inofensivo. No es lo que pasa: con
+`allow_credentials=True`, Starlette **refleja** el `Origin` de la peticion
+cuando trae cookie, y lo refleja siempre en el preflight. Esta app manda
+`session_token` como cookie `SameSite=None; Secure` en `google_auth`, asi que con
+`*` cualquier sitio que visitara un usuario podria llamar a este API **como ese
+usuario**. Esta medido en
+`backend/tests/test_cors_origins.py::test_starlette_refleja_el_origen_con_asterisco_y_credenciales`.
+
+El arranque rechaza, diciendo cual entrada y por que:
+
+| Se rechaza | Por que |
+|---|---|
+| `*` | Con credenciales no es "API publico", es suplantacion (arriba). |
+| `app.casadorelia.mx` | Sin esquema no es un origen. |
+| `https://app.casadorelia.mx/` | El `Origin` del navegador no trae barra final; esa entrada no empata con nada. |
+| `https://app.casadorelia.mx/admin` | Un origen no lleva ruta. CORS no es por ruta. |
+| `https://app.casadorelia.mx:443` | Puerto implicito: el navegador lo omite, asi que no empataria. |
+| `https://*.casadorelia.mx` | Starlette compara la cadena completa, no expande comodines. Enumera los subdominios. |
+| `http://app.casadorelia.mx` | `http` solo contra `localhost` / `127.0.0.1` / `[::1]`. La cookie sale `Secure` y no viajaria por ahi de todos modos. |
+| `https://a.mx,,https://b.mx` | Coma de sobra: `split(',')` dejaria una entrada vacia. |
+
+Mayusculas y entradas repetidas se normalizan en vez de truenar
+(`HTTPS://App.MX` → `https://app.mx`).
+
+**Lo que no hay que hacer para quitarse un error de CORS:** poner
+`allow_origin_regex` con un patron ancho, o reflejar el `Origin` de la peticion.
+Las dos cosas callan al navegador y reabren el agujero completo. Hay una prueba
+que falla si `allow_origin_regex` aparece en `server.py`. Si el frontend se
+mudo, la respuesta es agregar su origen a esta lista. Razonamiento en
+`app_config.py` y BOS-105.
 
 Las credenciales de Clip **no van en el `.env`**. Viven en el almacen de
 secretos de Paperclip y llegan al entorno del run que las necesita:

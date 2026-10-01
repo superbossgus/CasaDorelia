@@ -42,7 +42,7 @@ import backfill_brand
 import backfill_business_date
 import business_day
 import brands
-from app_config import jwt_secret
+from app_config import cors_origins, jwt_secret
 from branches_init import brand_for
 from business_day import (
     business_window,
@@ -81,6 +81,13 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
+
+# CORS
+# Se resuelve aqui, junto al resto de la configuracion, y no 6,500 lineas abajo
+# donde se arma el middleware: asi un `CORS_ORIGINS` invalido se lee como un
+# error de configuracion al arrancar y no como un fallo a mitad del archivo.
+# Mismo trato que `JWT_SECRET`: no hay respaldo (BOS-105).
+CORS_ORIGINS = cors_origins()
 
 # Twilio Config
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
@@ -6592,10 +6599,17 @@ async def get_uploaded_image(filename: str):
 # Include router
 app.include_router(api_router)
 
+# Sin valor de respaldo a proposito, igual que `JWT_SECRET`: `cors_origins()`
+# levanta y la app no arranca si falta `CORS_ORIGINS` o si la lista no sirve. El
+# respaldo anterior era `'*'`, y como la variable no estaba definida en ningun
+# lado ese era el valor que corria. Con `allow_credentials=True` eso no es "API
+# publico": Starlette refleja el `Origin` de quien pregunte, asi que cualquier
+# sitio podia llamar a este API con la sesion del usuario que lo visitara.
+# Razonamiento en `app_config.py` y BOS-105.
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

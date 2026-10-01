@@ -143,7 +143,15 @@ def _fuente_del_server():
 
 def test_server_toma_la_llave_del_modulo_que_levanta():
     fuente = _fuente_del_server()
-    asignaciones = re.findall(r"^JWT_SECRET\s*=\s*(.+)$", fuente, flags=re.MULTILINE)
+    asignaciones = [
+        # Un comentario al final de la linea no cambia de donde sale la llave,
+        # asi que no deberia tumbar la prueba: el siguiente que anote esa linea
+        # recibiria un fallo que no explica nada. Se recorta antes de comparar.
+        expresion.split("#")[0].strip()
+        for expresion in re.findall(
+            r"^JWT_SECRET\s*=\s*(.+)$", fuente, flags=re.MULTILINE
+        )
+    ]
     assert asignaciones == ["jwt_secret()"], (
         "JWT_SECRET debe salir de app_config.jwt_secret(), que levanta cuando "
         f"falta. Se encontro: {asignaciones}"
@@ -152,10 +160,12 @@ def test_server_toma_la_llave_del_modulo_que_levanta():
 
 def test_server_no_tiene_default_para_jwt_secret():
     fuente = _fuente_del_server()
-    # Cualquier forma de leerlo con respaldo: `.get('JWT_SECRET', ...)`,
-    # `.get("JWT_SECRET", ...)` o un `or 'algo'` pegado a la lectura.
+    # Las dos formas de leer el entorno con respaldo. `os.getenv` entra en la
+    # misma alternancia a proposito: es sinonimo exacto de `os.environ.get` y
+    # reintroduce el bug igual, asi que una guarda que solo mire `environ.get`
+    # promete en su nombre una cobertura que no tiene.
     con_respaldo = re.search(
-        r"""environ\.get\(\s*['"]JWT_SECRET['"]\s*,""", fuente
+        r"""(?:environ\.get|getenv)\(\s*['"]JWT_SECRET['"]\s*,""", fuente
     )
     assert con_respaldo is None, (
         "JWT_SECRET volvio a tener un valor de respaldo en el codigo. Un "

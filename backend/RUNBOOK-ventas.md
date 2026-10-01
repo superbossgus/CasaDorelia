@@ -36,10 +36,14 @@ Se genera, no se inventa:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-`app_config.require_secret` exige 32 caracteres como minimo (por debajo del
-tamaño del hash de HS256 la llave aporta menos entropia de la que el algoritmo
-usa) y trata un valor en blanco como ausente, que es el error tipico de copiar
-la plantilla de arriba sin llenarla.
+`app_config.require_secret` exige 32 **caracteres** como minimo y trata un valor
+en blanco como ausente, que es el error tipico de copiar la plantilla de arriba
+sin llenarla. Ojo con lo que mide ese minimo: es un piso de longitud, no de
+entropia — `"x" * 32` lo pasa. Sirve para atajar la llave escrita a mano, no para
+juzgar que tan aleatoria es. El numero sale de HS256, que usa la llave tal cual
+como material del HMAC: por debajo del tamaño del hash (256 bits) no hay forma de
+darle al algoritmo toda la entropia que puede aprovechar. Usa el comando de
+arriba y el punto es irrelevante: da 64 caracteres aleatorios.
 
 **No tiene valor de respaldo, a proposito.** Hasta BOS-103 se leia con
 `os.environ.get('JWT_SECRET', '<literal>')`: el literal estaba en el codigo, el
@@ -53,6 +57,15 @@ La llave de los entornos del grupo vive en el almacen de secretos de Paperclip
 en un comentario de tarea. **Rotarla invalida toda sesion emitida con la
 anterior** — eso es lo que se busca cuando la anterior quedo expuesta, y es
 gratis mientras la app no este desplegada.
+
+**Si el proceso muere al arrancar con `ConfigError: Falta la variable de entorno
+JWT_SECRET`, no es un bug:** es esta guarda haciendo su trabajo, y significa que
+el secreto no llego a *ese* entorno. En un deploy el sintoma es un traceback en el
+arranque, no un mensaje de configuracion, asi que vale anotarlo antes de buscar en
+otro lado: revisa que el binding `env.JWT_SECRET` este aplicado ahi. El mismo
+razonamiento, en la forma corta y sin el contexto de ventas, esta en
+[`CONFIG.md`](CONFIG.md), que es la referencia de variables de entorno del backend
+y la que existe tambien en `main`.
 
 ### `CORS_ORIGINS`: quien puede llamar al API con la sesion del usuario
 

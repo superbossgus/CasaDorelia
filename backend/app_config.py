@@ -32,11 +32,14 @@ import os
 from typing import List, Mapping, Optional
 from urllib.parse import urlsplit
 
-# Minimo de caracteres de una llave de firma. HS256 usa la llave tal cual como
-# material del HMAC, asi que una mas corta que el hash (256 bits = 32 bytes)
-# aporta menos entropia de la que el algoritmo puede aprovechar y entra en rango
-# de diccionario. 32 es el piso, no la recomendacion: `secrets.token_urlsafe(48)`
-# da 64 caracteres y es lo que se documenta en el runbook.
+# Minimo de **caracteres** de una llave de firma. Es un piso de longitud, no una
+# medida de entropia: `"x" * 32` lo pasa. Sirve para atajar la llave escrita a
+# mano y de paso la de un `.env` copiado a medias, no para juzgar que tan
+# aleatoria es. El numero sale de HS256, que usa la llave tal cual como material
+# del HMAC: por debajo del tamaño del hash (256 bits = 32 bytes) no hay forma de
+# darle al algoritmo toda la entropia que puede aprovechar. 32 es el piso, no la
+# recomendacion: `secrets.token_urlsafe(48)` da 64 caracteres y es lo que se
+# documenta en `backend/CONFIG.md` y en el runbook.
 MIN_SECRET_LENGTH = 32
 
 

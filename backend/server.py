@@ -42,6 +42,7 @@ import backfill_brand
 import backfill_business_date
 import business_day
 import brands
+from app_config import jwt_secret
 from branches_init import brand_for
 from business_day import (
     business_window,
@@ -73,7 +74,11 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Config
-JWT_SECRET = os.environ.get('JWT_SECRET', 'cafe-control-secret-key-2024')
+# Sin valor de respaldo a proposito: `jwt_secret()` levanta y la app no arranca
+# si falta `JWT_SECRET`. El respaldo anterior estaba escrito en este archivo, en
+# un repositorio publico, y como `.get()` no truena era el que de hecho firmaba
+# las sesiones. Detalle del razonamiento en `app_config.py` y BOS-103.
+JWT_SECRET = jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 

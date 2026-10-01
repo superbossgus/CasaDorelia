@@ -11,15 +11,47 @@ incluye.
 
 ## Configuracion (una vez por maquina)
 
-`server.py` exige `MONGO_URL` y `DB_NAME`; sin ellas no arranca. Van en
-`backend/.env`, que **no se versiona** (`.gitignore` cubre `.env`, `.env.*` y
-`*.env`, asi que tampoco se puede dejar un `.env.example` — por eso se documenta
-aqui):
+`server.py` exige `MONGO_URL`, `DB_NAME` y `JWT_SECRET`; sin cualquiera de las
+tres no arranca. Van en `backend/.env`, que **no se versiona** (`.gitignore`
+cubre `.env`, `.env.*` y `*.env`, asi que tampoco se puede dejar un
+`.env.example` — por eso se documenta aqui):
 
 ```
 MONGO_URL=mongodb://127.0.0.1:27017
 DB_NAME=casa_dorelia
+JWT_SECRET=<64 caracteres, generados; ver abajo>
 ```
+
+### `JWT_SECRET`: la llave de firma de las sesiones
+
+Es la llave HS256 con la que se firman **todas** las sesiones de la app —
+`login`, `register_tenant`, `login_loyalty_customer` y `login_partner`. HS256 es
+simetrico, asi que no es un secreto de lectura: quien tiene la llave **emite**
+sesiones, incluida la de un administrador de tenant.
+
+Se genera, no se inventa:
+
+```
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+`app_config.require_secret` exige 32 caracteres como minimo (por debajo del
+tamaño del hash de HS256 la llave aporta menos entropia de la que el algoritmo
+usa) y trata un valor en blanco como ausente, que es el error tipico de copiar
+la plantilla de arriba sin llenarla.
+
+**No tiene valor de respaldo, a proposito.** Hasta BOS-103 se leia con
+`os.environ.get('JWT_SECRET', '<literal>')`: el literal estaba en el codigo, el
+repositorio es publico, y como `.get()` no truena *ese* era el que firmaba en
+realidad — la app arrancaba sin la variable y nadie se enteraba. Ahora un
+secreto que falta tira el arranque, igual que `MONGO_URL`. Si alguien vuelve a
+ponerle default, truena `backend/tests/test_app_config.py`.
+
+La llave de los entornos del grupo vive en el almacen de secretos de Paperclip
+(secreto `JWT_SECRET`, inyectado como `env.JWT_SECRET`), no en el repositorio ni
+en un comentario de tarea. **Rotarla invalida toda sesion emitida con la
+anterior** — eso es lo que se busca cuando la anterior quedo expuesta, y es
+gratis mientras la app no este desplegada.
 
 Las credenciales de Clip **no van en el `.env`**. Viven en el almacen de
 secretos de Paperclip y llegan al entorno del run que las necesita:

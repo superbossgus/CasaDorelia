@@ -35,6 +35,16 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 
+# Carga de ventas de Clip (modulos puros, sin Mongo ni FastAPI dentro).
+from sales_import import (
+    IMPORT_SOURCES,
+    SOURCE_CLIP_EXPORT,
+    SOURCE_MANUAL,
+    SalesImportError,
+    plan_import,
+    reconcile_with_manual,
+)
+
 ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
@@ -434,6 +444,15 @@ class SaleResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     created_by: Optional[str] = None
+    # Origen del dato: "manual" (lo capturo una persona), "clip_export" o
+    # "clip_api". Las ventas viejas no traen el campo y por eso el default es
+    # manual: antes de la ingesta, todo se capturaba a mano.
+    source: str = SOURCE_MANUAL
+    # Falso cuando la venta se importo sin costo de producto: la pantalla no
+    # debe presentar utilidad para esas ventas.
+    cost_known: bool = True
+    # Dia de operacion en hora local del negocio (solo en ventas importadas).
+    business_date: Optional[str] = None
 
 class DashboardStats(BaseModel):
     total_sales_today: float
@@ -3115,14 +3134,185 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
         "clip_transaction_id": sale.clip_transaction_id,
         "notes": sale.notes,
         "created_by": current_user["user_id"],
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        # Capturada por una persona en el app. Las ventas que entran por
+        # /sales/import llevan "clip_export" o "clip_api".
+        "source": SOURCE_MANUAL,
+        "cost_known": True,
+        "inventory_applied": True
     }
-    
+
     await db.sales.insert_one(sale_dict)
     
     cafeteria = await db.cafeterias.find_one({"id": sale.cafeteria_id}, {"_id": 0, "name": 1})
     
     return SaleResponse(**sale_dict, cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida")
+
+
+# ============== CARGA DE VENTAS DE CLIP (BOS-71) ==============
+
+class SaleImportRow(BaseModel):
+    """Una venta de Clip ya normalizada (la produce `clip_import.parse_sales`)."""
+    model_config = ConfigDict(extra="ignore")
+    occurred_at: str                       # ISO-8601; sin offset = hora local (UTC-6)
+    gross_amount: float                    # lo que pago el cliente, IVA INCLUIDO
+    payment_method: Optional[str] = None
+    status: Optional[str] = None
+    dedup_key: Optional[str] = None
+    transaction_id: Optional[str] = None
+    receipt_no: Optional[str] = None
+    branch: Optional[str] = None
+    tip: Optional[float] = None
+    fee: Optional[float] = None
+    product_id: Optional[str] = None
+    product_name: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_cost: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class SalesImportRequest(BaseModel):
+    cafeteria_id: str
+    rows: List[SaleImportRow]
+    source: str = SOURCE_CLIP_EXPORT       # clip_export | clip_api
+    dry_run: bool = True                   # por default NO escribe
+    skip_inventory: bool = True            # ver nota abajo: hoy solo True
+    reconcile: bool = True
+
+
+@api_router.post("/sales/import")
+async def import_sales(
+    payload: SalesImportRequest,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Carga ventas de Clip sin los defectos de `POST /sales`.
+
+    - El monto llega con IVA incluido y aqui se desglosa; nunca se vuelve a sumar.
+    - La fecha es la de la venta (`occurred_at`), no la de la carga.
+    - No mueve inventario: la venta ya salio por el POS de Clip.
+    - Es idempotente por `dedup_key`; reimportar el mismo archivo no duplica.
+    - Con `dry_run` (default) devuelve el resumen y la conciliacion sin escribir.
+    """
+    if payload.source not in IMPORT_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"`source` debe ser uno de {list(IMPORT_SOURCES)}"
+        )
+    if not payload.skip_inventory:
+        # A proposito: una venta cobrada en Clip ya descargo el inventario
+        # fisico. Descontarla otra vez al importarla es el defecto #3 del
+        # analisis de BOS-71. Si hiciera falta, va en una tarea aparte.
+        raise HTTPException(
+            status_code=422,
+            detail=("Las ventas importadas no mueven inventario (`skip_inventory` "
+                    "debe ser true). Para una venta nueva usa POST /api/sales.")
+        )
+
+    tenant_filter = get_tenant_filter(current_user)
+    cafeteria = await db.cafeterias.find_one(
+        {**tenant_filter, "id": payload.cafeteria_id}, {"_id": 0, "name": 1}
+    )
+    if not cafeteria:
+        raise HTTPException(status_code=404, detail="Cafeteria no encontrada")
+    if (current_user["role"] != UserRole.ADMIN
+            and current_user.get("cafeteria_id")
+            and current_user["cafeteria_id"] != payload.cafeteria_id):
+        raise HTTPException(status_code=403, detail="No puedes cargar ventas de otra cafeteria")
+
+    rows = [row.model_dump() for row in payload.rows]
+
+    # Idempotencia: se consultan solo las claves del lote, no la coleccion entera.
+    candidate_keys = [r["dedup_key"] for r in rows if r.get("dedup_key")]
+    existing_keys = set()
+    if candidate_keys:
+        async for doc in db.sales.find(
+            {**tenant_filter, "dedup_key": {"$in": candidate_keys}}, {"_id": 0, "dedup_key": 1}
+        ):
+            existing_keys.add(doc["dedup_key"])
+
+    try:
+        plan = plan_import(
+            rows,
+            cafeteria_id=payload.cafeteria_id,
+            source=payload.source,
+            existing_keys=existing_keys,
+            tenant_id=current_user.get("tenant_id"),
+            created_by=current_user["user_id"],
+        )
+    except SalesImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Segunda pasada de idempotencia: las claves que el modulo derivo solo
+    # (filas sin `dedup_key` explicito) tambien pueden existir ya.
+    derived = [d["dedup_key"] for d in plan.documents if d["dedup_key"] not in existing_keys]
+    if derived:
+        already = set()
+        async for doc in db.sales.find(
+            {**tenant_filter, "dedup_key": {"$in": derived}}, {"_id": 0, "dedup_key": 1}
+        ):
+            already.add(doc["dedup_key"])
+        if already:
+            kept = []
+            for doc in plan.documents:
+                if doc["dedup_key"] in already:
+                    plan.skipped.append({
+                        "row": None,
+                        "business_date": doc["business_date"],
+                        "dedup_key": doc["dedup_key"],
+                        "reason": "ya_importada",
+                        "gross_amount": doc["total"],
+                    })
+                else:
+                    kept.append(doc)
+            plan.documents = kept
+
+    if payload.reconcile and plan.documents:
+        days = sorted({d["business_date"] for d in plan.documents})
+        # `business_date` es hora local (UTC-6) y `created_at` esta en UTC, asi
+        # que la ventana se abre un dia de cada lado; el agrupado por dia lo
+        # hace `reconcile_with_manual`, no esta consulta.
+        window_start = (datetime.fromisoformat(days[0]) - timedelta(days=1)).date().isoformat()
+        window_end = (datetime.fromisoformat(days[-1]) + timedelta(days=1)).date().isoformat()
+        manual = await db.sales.find(
+            {
+                **tenant_filter,
+                "cafeteria_id": payload.cafeteria_id,
+                "created_at": {"$gte": f"{window_start}T00:00:00", "$lte": f"{window_end}T23:59:59.999999+00:00"},
+            },
+            {"_id": 0, "created_at": 1, "total": 1, "payment_method": 1,
+             "source": 1, "business_date": 1},
+        ).to_list(5000)
+        plan.reconciliation = reconcile_with_manual(plan.documents, manual, only_days=days)
+
+    inserted = 0
+    if not payload.dry_run and plan.documents:
+        await db.sales.insert_many(plan.documents)
+        inserted = len(plan.documents)
+
+    return {
+        "dry_run": payload.dry_run,
+        "inserted": inserted,
+        "cafeteria_name": cafeteria.get("name"),
+        "summary": plan.summary(),
+        "reconciliation": plan.reconciliation,
+        "skipped": plan.skipped,
+        "rejected": plan.rejected,
+        # Lo que se insertaria, para que la pantalla lo pueda enseñar antes de escribir.
+        "preview": [
+            {
+                "dedup_key": d["dedup_key"],
+                "created_at": d["created_at"],
+                "business_date": d["business_date"],
+                "total": d["total"],
+                "subtotal": d["subtotal"],
+                "tax": d["tax"],
+                "payment_method": d["payment_method"],
+                "product_name": d["items"][0]["product_name"],
+            }
+            for d in plan.documents[:200]
+        ],
+    }
+
 
 # ============== POS (POINT OF SALE) ROUTES ==============
 

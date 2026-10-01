@@ -84,6 +84,13 @@ de la carga. Tambien corre solo al arrancar el server, igual que el de
 `business_date`: una venta capturada por una version anterior se quedaria fuera
 del corte por marca para siempre.
 
+> **Ojo en esta maquina:** ese CLI (y el de `backfill_business_date.py`) necesita
+> `motor` y `python-dotenv`, que **no estan instalados** en el mongod local —
+> estan en `requirements.txt`, pero el entorno de esta maquina solo tiene
+> `pymongo`. Hasta que se instalen, el backfill corre por el arranque del server,
+> o envolviendo la coleccion de `pymongo` en la forma async que espera
+> `backfill()`. El de BOS-101 se aplico asi.
+
 ### Por que `brand` y no `tenant_id`
 
 En `server.py` un tenant es la **cuenta SaaS** (plan, `max_branches`, logo,

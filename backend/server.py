@@ -35,6 +35,19 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 
+# Dia de operacion del negocio (UTC-6). Todo reporte de ventas corta por aqui:
+# `created_at` esta en UTC y una venta de las 19:00 de CDMX cae en el dia UTC
+# siguiente, asi que cortar por UTC inventa venta en dias cerrados (BOS-97).
+import backfill_business_date
+import business_day
+from business_day import (
+    business_window,
+    daily_totals,
+    day_start_utc,
+    recent_days,
+    stamp_business_date,
+)
+
 # Carga de ventas de Clip (modulos puros, sin Mongo ni FastAPI dentro).
 from sales_import import (
     IMPORT_SOURCES,
@@ -817,6 +830,19 @@ def get_tenant_filter(current_user: dict) -> dict:
         return {"tenant_id": tenant_id}
     # For legacy users without tenant, return empty filter (backwards compatibility)
     return {}
+
+def sales_day_window(start_date: Optional[str], end_date: Optional[str]) -> dict:
+    """Ventana de un reporte de ventas, por dia de operacion (UTC-6).
+
+    Reemplaza el filtro viejo sobre `created_at` (UTC). Acepta lo mismo que
+    mandaban las pantallas (`2026-09-30` o un ISO completo) y lo normaliza al
+    dia del negocio; el extremo superior cierra con `$lte` sobre el dia, que ya
+    incluye el dia entero.
+    """
+    try:
+        return business_window(start_date, end_date)
+    except business_day.BusinessDayError as exc:
+        raise HTTPException(status_code=400, detail=f"Rango de fechas invalido: {exc}")
 
 async def check_tenant_limit(tenant_id: str, resource_type: str) -> bool:
     """Check if tenant has reached their limit for a resource"""
@@ -2437,20 +2463,13 @@ async def export_sales_pdf(
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
     # Build query
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
-    
+
     # Create PDF
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
@@ -2572,17 +2591,10 @@ async def export_sales_excel(
     tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
     
@@ -3020,20 +3032,12 @@ async def get_sales(
     current_user: dict = Depends(get_current_user)
 ):
     tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
         query["cafeteria_id"] = current_user["cafeteria_id"]
-    
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
@@ -3141,6 +3145,10 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
         "cost_known": True,
         "inventory_applied": True
     }
+    # Dia de operacion (UTC-6): es el campo por el que cortan los reportes. Si
+    # no se sella aqui, una venta capturada a las 19:00 se reportaria el dia
+    # siguiente, igual que pasaba con las importadas.
+    stamp_business_date(sale_dict)
 
     await db.sales.insert_one(sale_dict)
     
@@ -3268,16 +3276,14 @@ async def import_sales(
 
     if payload.reconcile and plan.documents:
         days = sorted({d["business_date"] for d in plan.documents})
-        # `business_date` es hora local (UTC-6) y `created_at` esta en UTC, asi
-        # que la ventana se abre un dia de cada lado; el agrupado por dia lo
-        # hace `reconcile_with_manual`, no esta consulta.
-        window_start = (datetime.fromisoformat(days[0]) - timedelta(days=1)).date().isoformat()
-        window_end = (datetime.fromisoformat(days[-1]) + timedelta(days=1)).date().isoformat()
+        # Los dos lados hablan ya el mismo idioma (dia de operacion), asi que la
+        # ventana es exacta: ya no hace falta abrirla un dia de cada lado para
+        # compensar el desfase UTC.
         manual = await db.sales.find(
             {
                 **tenant_filter,
                 "cafeteria_id": payload.cafeteria_id,
-                "created_at": {"$gte": f"{window_start}T00:00:00", "$lte": f"{window_end}T23:59:59.999999+00:00"},
+                **business_window(days[0], days[-1]),
             },
             {"_id": 0, "created_at": 1, "total": 1, "payment_method": 1,
              "source": 1, "business_date": 1},
@@ -3369,8 +3375,9 @@ async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(g
         if cafeteria:
             cafeteria_id = cafeteria["id"]
     
-    # Generate order number for the day
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Numero de orden del dia de operacion, no del dia UTC: con el corte en UTC
+    # el consecutivo se reiniciaba a las 18:00 locales, a media jornada.
+    today_start = day_start_utc()
     order_count = await db.pos_orders.count_documents({
         **tenant_filter,
         "created_at": {"$gte": today_start.isoformat()}
@@ -3429,6 +3436,8 @@ async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(g
         "pos_order_id": order_id,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    # Misma regla que en /sales: el POS tambien sella el dia de operacion.
+    stamp_business_date(sale_dict)
     await db.sales.insert_one(sale_dict)
     
     # Deduct inventory
@@ -3462,8 +3471,9 @@ async def get_pos_orders(
         query["status"] = status
     
     if today_only:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        query["created_at"] = {"$gte": today_start.isoformat()}
+        # "Hoy" es el dia de operacion: los pedidos de la noche siguen siendo
+        # de hoy aunque su `created_at` UTC ya diga mañana.
+        query["created_at"] = {"$gte": day_start_utc().isoformat()}
     
     orders = await db.pos_orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
     return orders
@@ -3568,23 +3578,25 @@ async def cancel_pos_order(
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    
+    # Dia y mes de operacion (UTC-6). Con el corte en UTC, "hoy" arrancaba a las
+    # 18:00 del dia anterior y "ventas del mes" abria con dinero del mes pasado.
+    today = business_day.today()
+    month_start = business_day.month_start(today)
+
     query = {**tenant_filter}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
         query["cafeteria_id"] = current_user["cafeteria_id"]
-    
+
     all_sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
-    
-    today_str = today.isoformat()
-    month_str = month_start.isoformat()
-    
-    today_sales = [s for s in all_sales if s["created_at"] >= today_str]
-    month_sales = [s for s in all_sales if s["created_at"] >= month_str]
-    
+
+    # El dia se toma del documento (o se deriva de `created_at` si todavia no
+    # paso el backfill), nunca de la hora UTC cruda.
+    dated = [(business_day.sale_business_date(s), s) for s in all_sales]
+    today_sales = [s for day, s in dated if day == today]
+    month_sales = [s for day, s in dated if day and day[:7] == month_start[:7]]
+
     total_sales_today = sum(s["total"] for s in today_sales)
     total_sales_month = sum(s["total"] for s in month_sales)
     total_profit_today = sum(s["profit"] for s in today_sales)
@@ -3626,20 +3638,19 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     
     sales_by_cafeteria = list(cafe_sales.values())
     
-    # Sales trend
-    sales_trend = []
-    for i in range(6, -1, -1):
-        day = today - timedelta(days=i)
-        day_str = day.isoformat()
-        next_day_str = (day + timedelta(days=1)).isoformat()
-        day_sales = [s for s in all_sales if day_str <= s["created_at"] < next_day_str]
-        sales_trend.append({
-            "date": day.strftime("%Y-%m-%d"),
-            "day": day.strftime("%a"),
-            "total": sum(s["total"] for s in day_sales),
-            "profit": sum(s["profit"] for s in day_sales)
-        })
-    
+    # Tendencia: el corte diario por dia de operacion. Es el mismo agrupado que
+    # devuelve `clip_api.summarize_corte`, por eso los dos tienen que cuadrar
+    # peso por peso (ver tests/test_business_day.py).
+    sales_trend = [
+        {
+            "date": row["date"],
+            "day": datetime.fromisoformat(row["date"]).strftime("%a"),
+            "total": row["gross"],
+            "profit": row["profit"],
+        }
+        for row in daily_totals(all_sales, recent_days(7, today))
+    ]
+
     return DashboardStats(
         total_sales_today=round(total_sales_today, 2),
         total_sales_month=round(total_sales_month, 2),
@@ -3656,12 +3667,11 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
 @api_router.get("/reports/sales-comparison")
 async def get_sales_comparison(current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    month_str = month_start.isoformat()
-    
+    # Mes de operacion (UTC-6), no mes UTC: ver `get_dashboard_stats`.
+    month = business_window(start=business_day.month_start())
+
     # Apply tenant filter to both sales and cafeterias queries
-    sales_query = {**tenant_filter, "created_at": {"$gte": month_str}}
+    sales_query = {**tenant_filter, **month}
     sales = await db.sales.find(sales_query, {"_id": 0}).to_list(10000)
     cafeterias = await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)
     
@@ -3682,17 +3692,23 @@ async def get_sales_comparison(current_user: dict = Depends(require_roles([UserR
 @api_router.get("/reports/profit-analysis")
 async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    month_str = month_start.isoformat()
-    
+    month_start = business_day.month_start()
+
     # Apply tenant filter
-    query = {**tenant_filter, "created_at": {"$gte": month_str}}
+    scope = {**tenant_filter}
     if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    
-    sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find(query, {"_id": 0}).to_list(1000)
+        scope["cafeteria_id"] = cafeteria_id
+
+    # Las ventas cortan por dia de operacion. Las compras no guardan
+    # `business_date`, asi que se cortan por el instante UTC en que empieza el
+    # mes de operacion: mismo limite, expresado del modo que entiende la
+    # coleccion.
+    sales = await db.sales.find(
+        {**scope, **business_window(start=month_start)}, {"_id": 0}
+    ).to_list(10000)
+    purchases = await db.purchases.find(
+        {**scope, "created_at": {"$gte": day_start_utc(month_start).isoformat()}}, {"_id": 0}
+    ).to_list(1000)
     
     total_revenue = sum(s["subtotal"] for s in sales)
     total_cost_of_goods = sum(s["cost_total"] for s in sales)
@@ -6539,6 +6555,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def stamp_pending_business_dates():
+    """Sella el dia de operacion en las ventas que nacieron sin el (BOS-97).
+
+    Los reportes cortan por `business_date`, asi que una venta sin ese campo se
+    caeria de todos ellos. Correrlo al arrancar es lo que hace seguro el cambio
+    de campo sin un paso manual de despliegue; es idempotente, asi que a partir
+    del primer arranque no toca nada y cuesta una consulta que no empata.
+    """
+    try:
+        summary = await backfill_business_date.backfill(db.sales)
+    except Exception:  # pragma: no cover - el API no se cae por el backfill
+        logger.exception("no se pudo sellar `business_date` al arrancar")
+        return
+
+    if summary["stamped"]:
+        logger.info("dia de operacion sellado en %s ventas", summary["stamped"])
+    if summary["undated"]:
+        logger.warning("ventas sin `created_at` legible, quedan fuera de los reportes: %s -> %s",
+                       summary["undated"], summary["undated_ids"])
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

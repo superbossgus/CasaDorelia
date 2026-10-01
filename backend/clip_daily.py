@@ -14,9 +14,11 @@ armarlo son justo las dos donde es facil equivocarse:
    discrepar.
 
 2. **Que sucursales son.** El mapeo sucursal-de-Clip -> cafeteria de la base ya
-   vive en `branches_init.CASA_DORELIA_BRANCHES`. Se lee de ahi en vez de
-   repetirlo: el dia que se abra una tercera sucursal, el disparo diario la
-   incluye sin que nadie se acuerde de este archivo.
+   vive en `branches_init.GROUP_BRANCHES`. Se lee de ahi en vez de repetirlo: el
+   dia que se abra una tercera sucursal, el disparo diario la incluye sin que
+   nadie se acuerde de este archivo. De ahi sale tambien la **marca** con la que
+   se sella cada venta (`brand`), para que el corte por marca no dependa de que
+   alguien la escriba bien a mano.
 
 Una sucursal que falla **no** cancela a la otra. Son dos cuentas de Clip
 distintas, con credenciales distintas, y la falla tipica (una credencial
@@ -55,7 +57,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from branches_init import CASA_DORELIA_BRANCHES
+from branches_init import GROUP_BRANCHES
 from business_day import BUSINESS_TZ, business_date
 from clip_api import ClipApiError, _parse_day
 from clip_load import ClipLoadError, load_branch, open_sales_collection
@@ -93,7 +95,7 @@ def _count_in_db(sales: Any, *, cafeteria_id: str, day: str,
 
 
 def run_daily(sales: Any, *, day: str, commit: bool = False,
-              branches: Sequence[Mapping[str, Any]] = CASA_DORELIA_BRANCHES,
+              branches: Sequence[Mapping[str, Any]] = GROUP_BRANCHES,
               tenant_id: Optional[str] = None,
               loader: Callable[..., Dict[str, Any]] = load_branch) -> Dict[str, Any]:
     """Carga `day` en cada sucursal activa. Aisla la falla de cada una."""
@@ -106,7 +108,9 @@ def run_daily(sales: Any, *, day: str, commit: bool = False,
             continue
         clip_branch = branch["clip_branch"]
         cafeteria_id = branch["id"]
-        entry: Dict[str, Any] = {"branch": clip_branch, "cafeteria_id": cafeteria_id}
+        brand = branch.get("brand")
+        entry: Dict[str, Any] = {"branch": clip_branch, "cafeteria_id": cafeteria_id,
+                                 "brand": brand}
         try:
             loaded = loader(
                 sales,
@@ -114,6 +118,7 @@ def run_daily(sales: Any, *, day: str, commit: bool = False,
                 start=start,
                 end=end,
                 cafeteria_id=cafeteria_id,
+                brand=brand,
                 tenant_id=tenant_id,
                 created_by="clip_daily",
                 commit=commit,

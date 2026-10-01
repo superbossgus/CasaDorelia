@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from branches_init import brand_for
 from clip_api import ClipApiError, _parse_day, fetch_rows, load_credentials, summarize_corte
 from sales_import import SOURCE_CLIP_API, SalesImportError, plan_import
 
@@ -54,7 +55,8 @@ def _existing_keys(sales: Any, keys: Sequence[str], tenant_filter: Mapping[str, 
 
 
 def plan_against_db(rows: Iterable[Mapping[str, Any]], sales: Any, *, cafeteria_id: str,
-                    tenant_id: Optional[str] = None, created_by: Optional[str] = None):
+                    tenant_id: Optional[str] = None, brand: Optional[str] = None,
+                    created_by: Optional[str] = None):
     """`plan_import` consultando la base dos veces, igual que el endpoint.
 
     La segunda pasada no es redundante: las filas que llegan sin `dedup_key`
@@ -69,7 +71,8 @@ def plan_against_db(rows: Iterable[Mapping[str, Any]], sales: Any, *, cafeteria_
     already = _existing_keys(sales, declared, tenant_filter)
 
     plan = plan_import(rows, cafeteria_id=cafeteria_id, source=SOURCE_CLIP_API,
-                       existing_keys=already, tenant_id=tenant_id, created_by=created_by)
+                       existing_keys=already, tenant_id=tenant_id, brand=brand,
+                       created_by=created_by)
 
     derived = [d["dedup_key"] for d in plan.documents if d["dedup_key"] not in already]
     duplicated = _existing_keys(sales, derived, tenant_filter)
@@ -94,18 +97,26 @@ def plan_against_db(rows: Iterable[Mapping[str, Any]], sales: Any, *, cafeteria_
 def load_branch(sales: Any, *, branch: str, start: datetime, end: datetime,
                 cafeteria_id: str, commit: bool = False,
                 tenant_id: Optional[str] = None,
+                brand: Optional[str] = None,
                 created_by: Optional[str] = None,
                 rows: Optional[Sequence[Mapping[str, Any]]] = None,
                 **fetch_kwargs: Any) -> Dict[str, Any]:
     """Baja el rango de Clip, decide que se inserta y solo escribe con `commit`.
 
     `rows` permite pasar las filas ya bajadas (o de prueba) y saltarse la red.
+
+    `brand` no hace falta pasarlo: si no viene, sale del catalogo por
+    `cafeteria_id` (`branches_init.brand_for`). Asi ninguna via de carga puede
+    dejar la venta sin marca por olvido, que es como se produjo BOS-101.
     """
     if rows is None:
         rows = fetch_rows(load_credentials(branch), start, end, **fetch_kwargs)
 
+    if brand is None:
+        brand = brand_for(cafeteria_id)
+
     plan = plan_against_db(rows, sales, cafeteria_id=cafeteria_id,
-                           tenant_id=tenant_id, created_by=created_by)
+                           tenant_id=tenant_id, brand=brand, created_by=created_by)
 
     inserted = 0
     if commit and plan.documents:
@@ -116,6 +127,7 @@ def load_branch(sales: Any, *, branch: str, start: datetime, end: datetime,
     return {
         "branch": branch,
         "cafeteria_id": cafeteria_id,
+        "brand": brand,
         "committed": bool(commit),
         "inserted": inserted,
         "to_insert": len(plan.documents),

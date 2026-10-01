@@ -204,6 +204,7 @@ def _optional_int(value: Any) -> Optional[int]:
 
 def build_sale_document(row: Dict[str, Any], *, cafeteria_id: str, source: str,
                         tenant_id: Optional[str] = None,
+                        brand: Optional[str] = None,
                         created_by: Optional[str] = None,
                         imported_at: Optional[datetime] = None) -> Dict[str, Any]:
     """Arma el documento que se inserta en `sales` para una venta importada.
@@ -213,6 +214,11 @@ def build_sale_document(row: Dict[str, Any], *, cafeteria_id: str, source: str,
     cortan por `business_date`, no por `created_at`, porque una venta de las
     19:00 de CDMX se sella como el dia UTC siguiente. La fecha de la carga
     queda en `imported_at`, que es dato de auditoria, no de negocio.
+
+    `brand` es la marca dueña del dinero (`brands.py`). Se sella en la venta, no
+    solo en la sucursal, para que el corte por marca sea una consulta a `sales` y
+    no un `$lookup`; y queda `None` si quien llama no la supo, porque una marca
+    adivinada es peor que una marca ausente: la ausente se ve en el reporte.
     """
     if source not in IMPORT_SOURCES:
         raise SalesImportError(f"origen desconocido para una carga: {source!r}")
@@ -235,6 +241,7 @@ def build_sale_document(row: Dict[str, Any], *, cafeteria_id: str, source: str,
         "id": str(uuid.uuid4()),
         "cafeteria_id": cafeteria_id,
         "tenant_id": tenant_id,
+        "brand": brand,
         "items": [item],
         # Montos: el bruto de Clip ya traia IVA, aqui solo se desglosa.
         "subtotal": row["subtotal"],
@@ -322,6 +329,7 @@ def _count_by(items: Sequence[Dict[str, Any]], key: str) -> Dict[str, int]:
 def plan_import(rows: Iterable[Dict[str, Any]], *, cafeteria_id: str, source: str,
                 existing_keys: Iterable[str] = (),
                 tenant_id: Optional[str] = None,
+                brand: Optional[str] = None,
                 created_by: Optional[str] = None,
                 imported_at: Optional[datetime] = None,
                 iva_rate: float = IVA_RATE) -> ImportPlan:
@@ -378,6 +386,7 @@ def plan_import(rows: Iterable[Dict[str, Any]], *, cafeteria_id: str, source: st
             cafeteria_id=cafeteria_id,
             source=source,
             tenant_id=tenant_id,
+            brand=brand,
             created_by=created_by,
             imported_at=imported_at,
         ))

@@ -17,18 +17,31 @@ Es **idempotente**: corre las veces que quieras. Busca por `id`, que es estable
 y lo elige este archivo (no un uuid aleatorio), justo para que una segunda
 corrida reconozca la sucursal en lugar de duplicarla.
 
+### Dos marcas, no una (BOS-101)
+
+Estas sucursales **no son del mismo negocio**, aunque compartan base y dueño:
+`c-sji` es Casa Dorelia (Big E Stores) y `c-tecno` es Le Pain Dore (Grupo Viter,
+S.A. de C.V.), con contratos y socios distintos. Por eso cada una declara su
+`brand`, y el registro de marcas vive en `brands.py`. Sumar las dos en un total
+mezcla el dinero de dos repartos; el corte por marca es
+`python backend/brands.py --db casa_dorelia --date <dia>`.
+
 ### Por que `tenant_id` queda en `None`
 
 `server.py` trata a un usuario sin `tenant_id` como "legacy" y le devuelve un
-filtro vacio (`get_tenant_filter`), o sea que ve todas las sucursales. Casa
-Dorelia es **un** negocio con varias sucursales, no varios negocios, asi que el
-modo legacy es el que corresponde. Y hay una razon practica: un tenant nuevo
-nace con `max_branches: 1` (plan de prueba), de modo que `POST /api/cafeterias`
-rechazaria la segunda sucursal con 403. Crear el tenant hoy seria pagar ese
-costo sin necesitarlo.
+filtro vacio (`get_tenant_filter`), o sea que ve **todas** las sucursales. Eso es
+lo que se quiere: Gustavo es dueño de las dos marcas y las lee juntas, separadas
+por renglon, no aisladas una de otra.
 
-No es un camino de ida: el dia que el grupo meta varias empresas en la misma
-base, un `update_many` siembra `tenant_id` en `cafeterias` y en `sales`.
+Una version anterior de este archivo decia que el dia que hubiera varias
+empresas en la misma base bastaba un `update_many` sembrando `tenant_id`. Ese
+dia llego y resulto ser el campo equivocado: en `server.py` un tenant es la
+**cuenta SaaS** (plan, `max_branches`, logo, facturacion), no una marca. El
+detalle completo esta en `brands.py`; lo corto es que separar por `tenant_id`
+rompe el cupo de sucursales, esconde `c-tecno` de quien hoy lee todo, y haria
+que la siguiente corrida de este script no reconociera la sucursal y la
+**duplicara**. `brand` no usa nada de eso, y deja `tenant_id` libre para cuando
+de verdad haga falta una cuenta aparte.
 """
 from __future__ import annotations
 
@@ -41,9 +54,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from brands import CASA_DORELIA, LE_PAIN_DORE
+
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 
-# Las sucursales reales de Casa Dorelia / Big E Stores.
+# Las sucursales reales que comparten esta base. Son de **dos marcas distintas**
+# del mismo grupo de control (ver `brands.py`), no de un solo negocio: cada una
+# declara a cual pertenece en `brand`.
 #
 # `id` es el que ya usan los comandos de carga (`--cafeteria c-sji`) y los
 # fixtures de pruebas; se mantiene estable a proposito.
@@ -52,10 +69,11 @@ DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 # exacto lo tiene que dar Gustavo o la jefatura de cada sucursal; se corrige con
 # otra corrida de este mismo script y no afecta a las ventas ya cargadas, que
 # cuelgan del `id`.
-CASA_DORELIA_BRANCHES: List[Dict[str, Any]] = [
+GROUP_BRANCHES: List[Dict[str, Any]] = [
     {
         "id": "c-sji",
         "name": "Casa Dorelia San Jose Insurgentes",
+        "brand": CASA_DORELIA,
         "address": "San Jose Insurgentes, Benito Juarez, CDMX",
         "phone": None,
         "is_active": True,
@@ -63,8 +81,12 @@ CASA_DORELIA_BRANCHES: List[Dict[str, Any]] = [
         "clip_branch": "sji",
     },
     {
+        # Tecnoparque es Le Pain Dore CDMX, no Casa Dorelia: contrato propio
+        # ("ASOCIACION EN PARTICIPACION DE CAFETERIA CDMX TECNOPARQUE") y socios
+        # distintos. Se llamo "Casa Dorelia Tecnoparque" por error hasta BOS-101.
         "id": "c-tecno",
-        "name": "Casa Dorelia Tecnoparque",
+        "name": "Le Pain Dore Tecnoparque",
+        "brand": LE_PAIN_DORE,
         "address": "Tecnoparque, Azcapotzalco, CDMX",
         "phone": None,
         "is_active": True,
@@ -74,7 +96,20 @@ CASA_DORELIA_BRANCHES: List[Dict[str, Any]] = [
 
 # Campos que una segunda corrida puede corregir. `id` y `created_at` no estan:
 # el primero es la llave y el segundo es historia, no configuracion.
-UPDATABLE = ("name", "address", "phone", "is_active", "clip_branch")
+UPDATABLE = ("name", "brand", "address", "phone", "is_active", "clip_branch")
+
+
+def brand_for(cafeteria_id: str) -> Optional[str]:
+    """Marca de una sucursal segun este catalogo, o `None` si no esta.
+
+    Lo usan los comandos de carga para sellar `brand` en la venta sin que nadie
+    tenga que escribirlo en la linea de comandos: una marca tecleada a mano es
+    una marca que se puede teclear mal, y ya pasamos por eso.
+    """
+    for spec in GROUP_BRANCHES:
+        if spec["id"] == cafeteria_id:
+            return spec.get("brand")
+    return None
 
 
 class BranchInitError(RuntimeError):
@@ -158,7 +193,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         cafeterias = open_cafeterias_collection(args.mongo_url, args.db)
-        result = ensure_branches(cafeterias, CASA_DORELIA_BRANCHES,
+        result = ensure_branches(cafeterias, GROUP_BRANCHES,
                                  tenant_id=args.tenant, commit=args.commit)
     except BranchInitError as exc:
         print(f"ERROR: {exc}")

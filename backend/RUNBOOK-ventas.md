@@ -70,6 +70,50 @@ Mapeo sucursal de Clip → cafeteria en la base:
 | `sji` | `c-sji` |
 | `tecnoparque` | `c-tecno` |
 
+### Carga diaria (la que corre sola)
+
+Nadie tiene que correr lo anterior a mano para el corte del dia. Eso lo hace:
+
+```
+python backend/clip_daily.py --db casa_dorelia --catch-up 1 --commit
+```
+
+Un comando para **todas** las sucursales, sin fechas. Resuelve las dos cosas
+donde es facil equivocarse al armar un disparo programado:
+
+- **Que dia es "hoy".** Lo calcula con `business_day.BUSINESS_TZ` (UTC-6), no con
+  UTC. El disparo de la tarde cae a las `01:45Z`, que en UTC ya es el dia
+  siguiente: con `utcnow().date()` pediria un dia que apenas empieza y el corte
+  de las 20:00 CDMX saldria en cero.
+- **Que sucursales son.** Las lee de `CASA_DORELIA_BRANCHES`, con su
+  `--cafeteria`. Una tercera sucursal entra sola el dia que se abra.
+
+`--catch-up 1` recarga tambien el dia anterior, y no es de sobra: la corrida de
+la tarde ve hasta las 19:45 locales, asi que la venta de 19:45 a cerrar solo la
+puede recoger la corrida de la mañana siguiente. Sin eso esas horas no se
+cargarian nunca.
+
+Una sucursal que falla no detiene a la otra (son cuentas distintas, y la falla
+tipica — una credencial revocada — es de una sola). El codigo de salida es 1 si
+alguna fallo, y `db_rows` dice cuantos renglones quedaron en la base: **cero con
+`ok: true` significa "no cobro con tarjeta ese dia", que es distinto de "no
+corrio"**.
+
+Quien lo dispara: la rutina de Paperclip *Carga de ventas de Clip a casa_dorelia*
+(`03f5e143`), con dos horarios en `America/Mexico_City` — `45 7 * * *` y
+`45 19 * * *`, 15 min antes de cada corte del reporte de apertura (`0 8` y
+`0 20`, misma zona). Estan separados a proposito: dos fuentes de despertar en el
+mismo minuto se pelean el lock del run y una de las dos se pierde.
+`concurrencyPolicy` es `always_enqueue`, no `coalesce_if_active`, porque con
+coalescencia una corrida de la mañana que siguiera abierta se **comeria** la
+carga de la tarde — justo la falla que esto viene a arreglar.
+
+Para recuperar un dia suelto que se quedo sin cargar:
+
+```
+python backend/clip_daily.py --db casa_dorelia --date 2026-09-29 --commit
+```
+
 **Reimportar el mismo rango es seguro.** La idempotencia cuelga de `dedup_key`
 (`clip:<id de transaccion>`). Ojo con un detalle no obvio: las filas de la API
 de Clip llegan **sin** `dedup_key` — la deriva el importador — asi que la

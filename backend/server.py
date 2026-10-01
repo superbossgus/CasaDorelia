@@ -38,8 +38,11 @@ from openpyxl.utils import get_column_letter
 # Dia de operacion del negocio (UTC-6). Todo reporte de ventas corta por aqui:
 # `created_at` esta en UTC y una venta de las 19:00 de CDMX cae en el dia UTC
 # siguiente, asi que cortar por UTC inventa venta en dias cerrados (BOS-97).
+import backfill_brand
 import backfill_business_date
 import business_day
+import brands
+from branches_init import brand_for
 from business_day import (
     business_window,
     daily_totals,
@@ -466,6 +469,9 @@ class SaleResponse(BaseModel):
     cost_known: bool = True
     # Dia de operacion en hora local del negocio (solo en ventas importadas).
     business_date: Optional[str] = None
+    # Marca dueña del dinero (`brands.py`). Esta base guarda dos marcas del mismo
+    # grupo con socios distintos, asi que la venta dice de cual es (BOS-101).
+    brand: Optional[str] = None
 
 class DashboardStats(BaseModel):
     total_sales_today: float
@@ -3123,11 +3129,20 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
                     })
     
     profit = subtotal - cost_total
-    
+
+    # La marca dueña del dinero sale de la sucursal, no del usuario: esta base
+    # guarda dos marcas del mismo grupo y sin este campo no se pueden separar
+    # (BOS-101). Se lee aqui porque el nombre de la sucursal ya se necesitaba
+    # para la respuesta; es la misma consulta, no una de mas.
+    cafeteria = await db.cafeterias.find_one(
+        {"id": sale.cafeteria_id}, {"_id": 0, "name": 1, "brand": 1}
+    )
+
     sale_dict = {
         "id": sale_id,
         "cafeteria_id": sale.cafeteria_id,
         "tenant_id": current_user.get("tenant_id"),
+        "brand": (cafeteria or {}).get("brand") or brand_for(sale.cafeteria_id),
         "items": enriched_items,
         "subtotal": round(subtotal, 2),
         "tax": round(tax, 2),
@@ -3151,9 +3166,7 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
     stamp_business_date(sale_dict)
 
     await db.sales.insert_one(sale_dict)
-    
-    cafeteria = await db.cafeterias.find_one({"id": sale.cafeteria_id}, {"_id": 0, "name": 1})
-    
+
     return SaleResponse(**sale_dict, cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida")
 
 
@@ -3688,6 +3701,32 @@ async def get_sales_comparison(current_user: dict = Depends(require_roles([UserR
         })
     
     return comparison
+
+@api_router.get("/reports/sales-by-brand")
+async def get_sales_by_brand(
+    date: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Venta por marca de un dia de operacion (BOS-101).
+
+    Existe porque esta base guarda el dinero de **dos** marcas del mismo grupo
+    (Casa Dorelia y Le Pain Dore) con contratos y socios distintos: el total
+    consolidado mezcla dos repartos y no es publicable como venta de ninguna de
+    las dos. Aqui el total general viene como `gross_all_brands`, con el nombre
+    diciendo lo que es, y cada marca en su renglon con su vehiculo.
+
+    `date` es el dia de operacion (`YYYY-MM-DD`, UTC-6); sin el, es el historico.
+    Una venta sin `brand` cae en el renglon `sin-marca` en vez de desaparecer.
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    pipeline = brands.by_brand_pipeline(business_date=date,
+                                        tenant_id=tenant_filter.get("tenant_id"))
+    rows = await db.sales.aggregate(pipeline).to_list(100)
+
+    result = brands.summarize_brand_rows(rows)
+    result["business_date"] = date or "todo el historico"
+    return result
+
 
 @api_router.get("/reports/profit-analysis")
 async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
@@ -6576,6 +6615,30 @@ async def stamp_pending_business_dates():
     if summary["undated"]:
         logger.warning("ventas sin `created_at` legible, quedan fuera de los reportes: %s -> %s",
                        summary["undated"], summary["undated_ids"])
+
+
+@app.on_event("startup")
+async def stamp_pending_brands():
+    """Sella la marca en las ventas que nacieron sin ella (BOS-101).
+
+    Esta base guarda el dinero de dos marcas del mismo grupo con socios
+    distintos. Una venta sin `brand` se cae del corte por marca, que es justo el
+    reporte que existe para no mezclarlas. Igual que el backfill de
+    `business_date`: idempotente, y correrlo al arrancar es lo que evita un paso
+    manual de despliegue.
+    """
+    try:
+        summary = await backfill_brand.backfill(db.sales, db.cafeterias)
+    except Exception:  # pragma: no cover - el API no se cae por el backfill
+        logger.exception("no se pudo sellar `brand` al arrancar")
+        return
+
+    if summary["stamped"]:
+        logger.info("marca sellada en %s ventas: %s", summary["stamped"], summary["by_brand"])
+    if summary["unmapped"]:
+        logger.warning("ventas de una sucursal sin marca en el catalogo, quedan fuera del "
+                       "corte por marca: %s -> %s",
+                       summary["unmapped"], summary["unmapped_cafeterias"])
 
 
 @app.on_event("shutdown")

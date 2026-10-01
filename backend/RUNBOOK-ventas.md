@@ -1,6 +1,13 @@
 # Runbook: ventas de Clip a la base
 
-Como se carga la venta con tarjeta de Casa Dorelia, y que **no** incluye.
+Como se carga la venta con tarjeta de las cafeterias del grupo, y que **no**
+incluye.
+
+> **Esta base guarda dos marcas, no una.** `c-sji` es Casa Dorelia (Big E Stores)
+> y `c-tecno` es Le Pain Dore (Grupo Viter, S.A. de C.V.), con contratos y socios
+> distintos. **Nunca publiques el total consolidado como venta de una marca**: el
+> 84% de los pesos cargados son de Le Pain Dore. El corte correcto es
+> [por marca](#venta-por-marca). Detalle en `brands.py` y BOS-90 / BOS-101.
 
 ## Configuracion (una vez por maquina)
 
@@ -24,7 +31,7 @@ las ventas de Tecnoparque.
 
 | Base | Que es |
 |---|---|
-| `casa_dorelia` | **Dinero real.** Es la que apunta el `.env`. |
+| `casa_dorelia` | **Dinero real.** Es la que apunta el `.env`. Guarda las dos marcas. |
 | `casa_dorelia_local` | Demo sembrada (Dore Central / Norte / Sur, direcciones inventadas). |
 | `casa_dorelia_bos73_check` | Fixture de pruebas de BOS-73. |
 
@@ -37,10 +44,54 @@ python backend/branches_init.py --db casa_dorelia            # en seco
 python backend/branches_init.py --db casa_dorelia --commit   # escribe
 ```
 
-Idempotente: se puede correr siempre. Tambien es la via de corregir el nombre o
-el domicilio de una sucursal — se edita `CASA_DORELIA_BRANCHES` y se vuelve a
+Idempotente: se puede correr siempre. Tambien es la via de corregir el nombre, la
+marca o el domicilio de una sucursal — se edita `GROUP_BRANCHES` y se vuelve a
 correr. Las ventas ya cargadas no se mueven, porque cuelgan del `id` (`c-sji`,
 `c-tecno`), que nunca cambia.
+
+| `id` | Nombre | `brand` | Vehiculo |
+|---|---|---|---|
+| `c-sji` | Casa Dorelia San Jose Insurgentes | `casa-dorelia` | Big E Stores |
+| `c-tecno` | Le Pain Dore Tecnoparque | `le-pain-dore` | Grupo Viter, S.A. de C.V. |
+
+## Venta por marca
+
+```
+python backend/brands.py --db casa_dorelia --date 2026-09-30   # un dia
+python backend/brands.py --db casa_dorelia                     # historico
+```
+
+Devuelve un renglon por marca, cada uno con su vehiculo (quien reparte ese
+dinero). El total general viene como `gross_all_brands`, nombrado asi a proposito:
+**no es la venta de ninguna de las dos marcas**, es la suma de dos repartos
+distintos. Lo mismo por API, para la app:
+
+```
+GET /api/reports/sales-by-brand?date=2026-09-30
+```
+
+Una venta sin `brand` no se cae del reporte: cae en el renglon `sin-marca` y se
+cuenta en `unlabeled_sales`. Si ves ese renglon, corre el backfill:
+
+```
+python backend/backfill_brand.py --dry-run   # dice que sellaria
+python backend/backfill_brand.py             # sella
+```
+
+Solo agrega `brand` donde falta, por `_id`, derivandola de la sucursal de la
+venta. **No toca `id` ni `dedup_key`**, asi que no puede romper la idempotencia
+de la carga. Tambien corre solo al arrancar el server, igual que el de
+`business_date`: una venta capturada por una version anterior se quedaria fuera
+del corte por marca para siempre.
+
+### Por que `brand` y no `tenant_id`
+
+En `server.py` un tenant es la **cuenta SaaS** (plan, `max_branches`, logo,
+facturacion), no una marca. Separar las marcas con `tenant_id` rompe el cupo de
+sucursales, esconde `c-tecno` de quien hoy lee todo (Gustavo, que es dueño de las
+dos y las quiere ver juntas pero separadas por renglon) y haria que
+`branches_init` no reconociera la sucursal y la duplicara. El razonamiento
+completo esta en `brands.py`.
 
 ## Corte del dia (solo lectura, no escribe)
 
@@ -85,8 +136,8 @@ donde es facil equivocarse al armar un disparo programado:
   UTC. El disparo de la tarde cae a las `01:45Z`, que en UTC ya es el dia
   siguiente: con `utcnow().date()` pediria un dia que apenas empieza y el corte
   de las 20:00 CDMX saldria en cero.
-- **Que sucursales son.** Las lee de `CASA_DORELIA_BRANCHES`, con su
-  `--cafeteria`. Una tercera sucursal entra sola el dia que se abra.
+- **Que sucursales son.** Las lee de `GROUP_BRANCHES`, con su `--cafeteria` y su
+  `brand`. Una tercera sucursal entra sola el dia que se abra.
 
 `--catch-up 1` recarga tambien el dia anterior, y no es de sobra: la corrida de
 la tarde ve hasta las 19:45 locales, asi que la venta de 19:45 a cerrar solo la

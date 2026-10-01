@@ -240,3 +240,97 @@ def test_el_backfill_no_vuelve_a_mover_lo_ya_sellado():
     por_sellar, _ = plan_backfill([ya])
 
     assert por_sellar[0]["business_date"] == "2026-09-21"  # respeta el sello, no el UTC
+
+
+# --------------------------------------------------------------------------
+# El backfill contra la coleccion, que es lo que corre al arrancar el API
+# --------------------------------------------------------------------------
+
+class FakeSalesAsync:
+    """Coleccion async de mentiras: lo justo que usa `backfill`.
+
+    Solo entiende el filtro `MISSING_BUSINESS_DATE` (que es el unico que manda
+    el backfill) y aplica los `UpdateOne` por `_id`.
+    """
+
+    def __init__(self, docs):
+        self.docs = [dict(d) for d in docs]
+        self.lotes = []
+
+    def find(self, query, projection=None):
+        faltantes = [dict(d) for d in self.docs if not d.get("business_date")]
+        return _CursorFalso(faltantes)
+
+    async def bulk_write(self, operaciones, ordered=True):
+        self.lotes.append(len(operaciones))
+        modificados = 0
+        por_id = {d["_id"]: d for d in self.docs}
+        for op in operaciones:
+            doc = por_id[op._filter["_id"]]
+            cambio = op._doc["$set"]
+            if any(doc.get(k) != v for k, v in cambio.items()):
+                doc.update(cambio)
+                modificados += 1
+        return _ResultadoFalso(modificados)
+
+
+class _CursorFalso:
+    def __init__(self, docs):
+        self._docs = docs
+
+    async def to_list(self, length=None):
+        return self._docs if length is None else self._docs[:length]
+
+
+class _ResultadoFalso:
+    def __init__(self, modified_count):
+        self.modified_count = modified_count
+
+
+def corre(coroutine):
+    import asyncio
+
+    return asyncio.run(coroutine)
+
+
+def ventas_sin_sellar():
+    return [
+        {"_id": i, "id": f"s{i}", "created_at": occurred_at}
+        for i, (occurred_at, _monto, _suc, _dia) in enumerate(VENTAS_DESFASADAS)
+    ]
+
+
+def test_el_backfill_sella_las_ventas_viejas_y_queda_idempotente():
+    from backfill_business_date import backfill
+
+    sales = FakeSalesAsync(ventas_sin_sellar())
+
+    primera = corre(backfill(sales))
+    assert primera["examined"] == 8
+    assert primera["stamped"] == 8
+    assert [d["business_date"] for d in sales.docs] == [dia for _o, _m, _s, dia in VENTAS_DESFASADAS]
+
+    segunda = corre(backfill(sales))
+    assert segunda["examined"] == 0  # ya no hay nada que empate el filtro
+    assert segunda["stamped"] == 0
+
+
+def test_el_backfill_en_seco_no_escribe():
+    from backfill_business_date import backfill
+
+    sales = FakeSalesAsync(ventas_sin_sellar())
+    resumen = corre(backfill(sales, dry_run=True))
+
+    assert resumen["to_stamp"] == 8
+    assert resumen["stamped"] == 0
+    assert sales.lotes == []
+    assert all("business_date" not in d for d in sales.docs)
+
+
+def test_el_backfill_parte_en_lotes_en_vez_de_una_escritura_gigante():
+    from backfill_business_date import backfill
+
+    sales = FakeSalesAsync(ventas_sin_sellar())
+    corre(backfill(sales, batch_size=3))
+
+    assert sales.lotes == [3, 3, 2]

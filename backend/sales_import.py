@@ -33,15 +33,16 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from business_day import BUSINESS_TZ, business_date
 from clip_import import IVA_RATE, build_dedup_key, classify_status, normalize_payment_method, split_tax
 
-# Mexico dejo de aplicar horario de verano en octubre de 2022, asi que la zona
-# del negocio es UTC-6 todo el año. Se usa un offset fijo a proposito: evita
-# depender de `tzdata` (que en Windows no viene con Python) y es determinista.
-BUSINESS_TZ = timezone(timedelta(hours=-6), name="America/Mexico_City")
+# `BUSINESS_TZ` y `business_date` viven en `business_day`: el huso del negocio
+# se declara una sola vez y lo comparten la carga, el corte de Clip y los
+# reportes del app. Se importan aqui (y siguen siendo `sales_import.BUSINESS_TZ`
+# para quien ya los pedia asi) en vez de volver a escribir el offset.
 
 SOURCE_MANUAL = "manual"
 SOURCE_CLIP_EXPORT = "clip_export"
@@ -101,11 +102,6 @@ def parse_occurred_at(value: Any) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=BUSINESS_TZ)
     return dt.astimezone(timezone.utc)
-
-
-def business_date(occurred_at_utc: datetime) -> str:
-    """Dia de operacion (YYYY-MM-DD) en hora local del negocio."""
-    return occurred_at_utc.astimezone(BUSINESS_TZ).date().isoformat()
 
 
 def _positive_amount(value: Any, field_name: str) -> float:
@@ -212,9 +208,11 @@ def build_sale_document(row: Dict[str, Any], *, cafeteria_id: str, source: str,
                         imported_at: Optional[datetime] = None) -> Dict[str, Any]:
     """Arma el documento que se inserta en `sales` para una venta importada.
 
-    `created_at` es la fecha REAL de la venta (no la de la carga) porque todos
-    los reportes del app cortan por ese campo. La fecha de la carga queda en
-    `imported_at`, que es dato de auditoria, no de negocio.
+    `created_at` es la fecha REAL de la venta (no la de la carga), en UTC, y
+    `business_date` es el dia de operacion en hora local: los reportes del app
+    cortan por `business_date`, no por `created_at`, porque una venta de las
+    19:00 de CDMX se sella como el dia UTC siguiente. La fecha de la carga
+    queda en `imported_at`, que es dato de auditoria, no de negocio.
     """
     if source not in IMPORT_SOURCES:
         raise SalesImportError(f"origen desconocido para una carga: {source!r}")

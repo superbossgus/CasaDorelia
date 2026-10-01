@@ -34,6 +34,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
+from app_config import jwt_secret
 
 ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
@@ -47,7 +48,12 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Config
-JWT_SECRET = os.environ.get('JWT_SECRET', 'cafe-control-secret-key-2024')
+# Sin valor de respaldo a proposito: `jwt_secret()` levanta y la app no arranca
+# si falta `JWT_SECRET`. El respaldo anterior estaba escrito en este archivo, en
+# un repositorio publico, y como `.get()` no truena era el valor que de hecho se
+# usaba: la app firmaba sesiones con una llave publicada sin avisar (BOS-103).
+# Se lee despues de `load_dotenv`, asi que el `.env` local cuenta.
+JWT_SECRET = jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 

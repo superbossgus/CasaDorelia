@@ -30,6 +30,7 @@ from clip_api import (  # noqa: E402
     load_credentials,
     map_payment,
     split_window,
+    summarize_corte,
 )
 from sales_import import SOURCE_CLIP_API, normalize_row, plan_import  # noqa: E402
 
@@ -394,6 +395,62 @@ def test_reimportar_el_mismo_rango_no_duplica():
                           existing_keys=existentes)
     assert segunda.documents == []
     assert segunda.summary()["skipped_reasons"] == {"ya_importada": 2}
+
+
+# --------------------------------------------------------------------------
+# Corte por dia de operacion
+# --------------------------------------------------------------------------
+
+def test_el_corte_agrupa_por_dia_del_negocio_no_por_dia_utc():
+    """Una venta de las 18:08 de CDMX llega como `00:08Z` del dia siguiente.
+
+    Es el caso real observado en SJI el 30/09: agrupar por dia UTC la correria
+    al 01/10 y dejaria el corte del 30/09 corto. El corte se hace en UTC-6.
+    """
+    raw = [
+        payment(id="txn_dia", created_at="2026-10-01T00:08:46.000Z", amount=240.0,
+                tip=0.0, total=240.0),
+        payment(id="txn_tarde", created_at="2026-09-30T23:55:22.000Z", amount=116.0,
+                tip=0.0, total=116.0),
+        # 06:00Z del 01/10 ya es medianoche del 01/10 en CDMX: otro dia de operacion.
+        payment(id="txn_otro_dia", created_at="2026-10-01T06:30:00.000Z", amount=58.0,
+                tip=0.0, total=58.0),
+    ]
+    rows = [map_payment(item, branch="sji", index=i) for i, item in enumerate(raw)]
+
+    corte = summarize_corte(rows, branch="sji")
+
+    assert corte["by_business_date"] == [
+        {"date": "2026-09-30", "transactions": 2, "gross": 356.0},
+        {"date": "2026-10-01", "transactions": 1, "gross": 58.0},
+    ]
+    assert corte["gross_total"] == 414.0
+
+
+def test_el_corte_deja_las_propinas_fuera_del_total_pero_las_reporta():
+    raw = [payment(id="txn_001", amount=116.0, tip=20.0, total=136.0)]
+    rows = [map_payment(item, branch="sji", index=0) for item in raw]
+
+    corte = summarize_corte(rows, branch="sji")
+
+    assert corte["gross_total"] == 116.0  # el consumo, no los 136 cobrados
+    assert corte["tips_excluded"] == 20.0
+    assert corte["subtotal_total"] == 100.0
+    assert corte["tax_total"] == 16.0
+
+
+def test_el_corte_no_cuenta_una_cancelada_y_declara_que_falta_el_efectivo():
+    raw = [payment(id="txn_ok", amount=116.0, tip=0.0, total=116.0),
+           payment(id="txn_mala", receipt_no="DEF456", status="cancelled", amount=29.0)]
+    rows = [map_payment(item, branch="tecnoparque", index=i) for i, item in enumerate(raw)]
+
+    corte = summarize_corte(rows, branch="tecnoparque")
+
+    assert corte["transactions"] == 1
+    assert corte["gross_total"] == 116.0
+    assert corte["skipped_reasons"] == {"no_cobrada:reversed": 1}
+    assert corte["cash_coverage"]["includes_cash"] is False
+    assert corte["gross_by_payment_method"] == {"tarjeta": 116.0}
 
 
 def test_tope_de_paginas_por_ventana():

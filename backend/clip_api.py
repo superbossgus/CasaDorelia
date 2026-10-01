@@ -512,6 +512,48 @@ def fetch_rows(credentials: ClipCredentials, start: datetime, end: datetime,
     ]
 
 
+def summarize_corte(rows: Sequence[Mapping[str, Any]], *, branch: str) -> Dict[str, Any]:
+    """Corte por dia de operacion, sin escribir nada y sin tocar Mongo.
+
+    Es la vista que se aprueba ANTES de cargar: pasa las filas por el mismo
+    `plan_import` que hara la carga, asi que el total de aqui es exactamente el
+    que se insertaria (IVA desglosado, propinas fuera, devoluciones fuera).
+
+    El dia es el dia local del negocio (`business_date`, UTC-6), no el dia UTC:
+    una venta de las 18:08 de CDMX llega de Clip como `00:08Z` del dia
+    siguiente, y agruparla por UTC la correria de dia.
+    """
+    from sales_import import SOURCE_CLIP_API, plan_import  # import tardio: evita ciclo
+
+    plan = plan_import(list(rows), cafeteria_id=f"corte-{branch}", source=SOURCE_CLIP_API)
+    summary = plan.summary()
+
+    por_dia: Dict[str, Dict[str, Any]] = {}
+    for doc in plan.documents:
+        dia = por_dia.setdefault(
+            doc["business_date"], {"date": doc["business_date"], "transactions": 0, "gross": 0.0}
+        )
+        dia["transactions"] += 1
+        dia["gross"] = round(dia["gross"] + doc["total"], 2)
+
+    return {
+        "branch": branch,
+        "transactions": summary["to_insert"],
+        "skipped": summary["skipped"],
+        "skipped_reasons": summary["skipped_reasons"],
+        "rejected": summary["rejected"],
+        "gross_total": summary["gross_total"],
+        "subtotal_total": summary["subtotal_total"],
+        "tax_total": summary["tax_total"],
+        "gross_by_payment_method": summary["gross_by_payment_method"],
+        # Las propinas se reportan aparte a proposito: son del personal, no son
+        # venta, y nunca entran al total que se carga.
+        "tips_excluded": round(sum(float(r.get("tip") or 0.0) for r in rows), 2),
+        "cash_coverage": summary["cash_coverage"],
+        "by_business_date": [por_dia[dia] for dia in sorted(por_dia)],
+    }
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -546,6 +588,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     pull.add_argument("--status", choices=API_STATUSES, default=None)
     pull.add_argument("--json", dest="json_out", help="archivo donde dejar las filas")
 
+    corte = sub.add_parser("corte", help="corte por dia de operacion, sin escribir nada")
+    corte.add_argument("--branch", required=True)
+    corte.add_argument("--from", dest="start", required=True)
+    corte.add_argument("--to", dest="end", required=True)
+
     args = parser.parse_args(argv)
 
     try:
@@ -567,6 +614,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "gross_amount": round(sum(r["gross_amount"] for r in rows if r["status"] == "paid"), 2),
                 "note": "La API no incluye efectivo; el corte queda corto por diseno.",
             }, indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "corte":
+            rows = fetch_rows(
+                credentials,
+                _parse_day(args.start),
+                _parse_day(args.end, end_of_day=True),
+            )
+            print(json.dumps(summarize_corte(rows, branch=credentials.branch),
+                             indent=2, ensure_ascii=False))
             return 0
 
         rows = fetch_rows(

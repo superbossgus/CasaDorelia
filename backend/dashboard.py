@@ -1704,8 +1704,9 @@ _TEMPLATE = r"""<!DOCTYPE html>
         NUM.format(L.payment_methods["otro"]) + " cobro(s) llegaron de Clip sin " +
         "tarjeta y sin rotulo («OTHER» con marca «XX» y sin emisor), y su monto " +
         "esta en el desglose de su marca. No se les llama tarjeta ni efectivo: " +
-        "hay que mirarlos en la app de Clip antes de leerlos como venta. El unico " +
-        "que habia resulto ser una cancelacion, y las cancelaciones ya no entran."]);
+        "hay que mirarlos en la app de Clip antes de leerlos como venta. En 360 " +
+        "dias y 2,329 cobros, los dos unicos renglones de esta forma resultaron " +
+        "cancelaciones — no efectivo — y las cancelaciones ya no entran."]);
     }
     if (L.margin_unknown) {
       items.push(["No dice utilidad ni margen. ",

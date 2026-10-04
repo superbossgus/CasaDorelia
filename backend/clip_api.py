@@ -14,10 +14,11 @@ Contrato de la API, verificado contra developer.clip.mx (2026-10-01):
   puede ver una vez**; si se pierde hay que generar otra.
 - Parametros: `from`, `to` (ISO-8601, obligatorios), `status` (`paid` |
   `cancelled`), `last4`, `limit` (1..100, default 20), `pagination_token`.
-- La ventana `from`..`to` **no puede exceder 720 horas** (30 dias) y no se
-  pueden consultar transacciones de mas de un ano de antiguedad. Por eso
-  `split_window` parte el rango solicitado en ventanas validas y pagina cada
-  una; el que llama pide "del 21/09 a hoy" y no se entera.
+- La ventana `from`..`to` **no puede exceder un mes de calendario** (la doc
+  dice "720 horas", y eso es falso en febrero: ver `MAX_AGE` arriba de
+  `split_window`) y no se pueden consultar transacciones de mas de un ano de
+  antiguedad. Por eso `split_window` parte el rango solicitado en ventanas
+  validas y pagina cada una; el que llama pide "del 21/09 a hoy" y no se entera.
 - La paginacion devuelve `meta.pagination_token`.
 
 Decisiones que cambian el dinero reportado (y por que):
@@ -42,20 +43,41 @@ Decisiones que cambian el dinero reportado (y por que):
    Hasta BOS-119 los tres caian en `"tarjeta"` por el `return` final. En
    Tecnoparque eso son $25,214 de vales de un año reportados como tarjeta.
 
+   La propia doc de Clip dice que `OTHER` es "la tarjeta no es de debito ni
+   credito, **por ejemplo, tarjeta de vales y pago en efectivo**". O sea que el
+   esquema **admite** efectivo en este cajon; lo que no pasa es que llegue (ver
+   el punto 5). Por eso `_payment_method` no le dice efectivo a un renglon sin
+   tarjeta: el cajon da para las dos cosas y el dato no las distingue.
+
 4. **Un `status` vacio es una cancelacion.** No es "no se sabe": la API siempre
    manda el campo y `?status=cancelled` devuelve justo esos renglones (ver
    `_status`). `classify_status("")` dice `"paid"` porque en el export del panel
    una columna ausente si significa cobrada; aqui significa lo contrario, y sin
    la rama una cancelacion entra como venta.
 
-5. **El efectivo de la app no viaja por esta API.** Confirmado dos veces el
-   2026-10-04. Medido: 1,912 cobros en 360 dias con las credenciales de las dos
-   sucursales, **cero** rotulados efectivo. Y contra la realidad: Gustavo
-   reporta 6 a 20 cobros en efectivo por dia por sucursal, y el 30/08 hubo 5 en
-   SJI — ese dia la API entrega **2** renglones (un cobro con tarjeta y una
-   cancelacion), ninguno de ellos efectivo. La app si los registra
-   (`Ventas > Efectivo`), pero esa coleccion vive detras de una ruta que el
-   gateway contesta pidiendo firma AWS y no acepta la llave de comercio.
+5. **El efectivo de la app no viaja por esta API.** Cerrado el 2026-10-04 con
+   un censo de la taxonomia completa, no con una muestra: **2,329 cobros** en
+   360 dias de las dos sucursales, agrupados por
+   `(payment_method, sub_type, card.brand, card.issuer, status)`.
+   **Cero** rotulados efectivo.
+
+   Lo que cierra la pregunta es *que* son los unicos dos renglones sin tarjeta
+   del año. Los dos traen `sub_type: "CONSUMER"`, `card.brand: "XX"`,
+   `last4: "0000"` **y `status: ""`** — o sea, por el punto 4, los dos son
+   **cancelaciones**, no efectivo. Una cancelacion llega sin identidad de
+   tarjeta, y eso explica la forma sin tener que inventarle efectivo. Con eso el
+   cajon "sin tarjeta" queda en 0 renglones cobrados en un año.
+
+   Y cuadra con la realidad que reporta Gustavo: 6 a 20 cobros en efectivo por
+   dia por sucursal, y el 30/08 hubo 5 en SJI; ese dia la API entrega **2**
+   renglones de SJI (un cobro con tarjeta de $5.00 y una cancelacion de $5.00).
+
+   No es una limitante de la credencial: la **documentacion de Clip** lo dice.
+   La guia de conciliacion (`developer.clip.mx/docs/conciliacion-de-transaccio
+   nes-apis-1`) pone el recibo de un cobro en efectivo en la app, el panel, los
+   reportes descargables y el correo de confirmacion — y en ningun endpoint.
+   La ruta de efectivo del gateway contesta pidiendo firma AWS (el esquema con
+   el que entra la app), no la llave de comercio.
 
    Consecuencia que hay que decir siempre: el total de este camino es un
    **piso**, y el faltante **no es chico**. La cobertura la declara
@@ -64,6 +86,7 @@ Decisiones que cambian el dinero reportado (y por que):
 Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
     python clip_api.py pull --branch sji --from 2026-09-21 --to 2026-10-01
+    python clip_api.py census --branch sji --days 360   # ?ya llega efectivo?
 """
 from __future__ import annotations
 
@@ -86,7 +109,20 @@ API_BASE = "https://api-gw.payclip.com"
 PAYMENTS_PATH = "/payments"
 
 # Limites que impone Clip, no nosotros.
-MAX_WINDOW = timedelta(hours=720)
+#
+# El limite real de la ventana es **un mes de calendario**, no las "720 horas"
+# que dice la documentacion. Medido contra la API el 2026-10-04 (BOS-119):
+#
+#     from 2026-01-06 22:08 -> to 2026-02-06 22:08  (31 dias) -> 200
+#     from 2026-01-06 22:08 -> to 2026-02-07 22:08             -> 400
+#     from 2026-02-06 22:08 -> to 2026-03-06 22:08  (28 dias) -> 200
+#     from 2026-02-06 22:08 -> to 2026-03-06 23:08             -> 400
+#
+# O sea: `to <= from + 1 mes`, con el mismo dia y la misma hora. Un delta fijo
+# de 720 h es mas largo que un mes de calendario **solo cuando la ventana
+# arranca en febrero**, y ahi la API contesta 400 y tumba el jalon completo.
+# Es una mina que explota una vez al ano, justo en el backfill de un año de
+# dinero; por eso aqui se avanza por mes de calendario y no por un timedelta.
 MAX_AGE = timedelta(days=365)
 MAX_LIMIT = 100
 DEFAULT_LIMIT = 100
@@ -217,9 +253,28 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def add_one_month(value: datetime) -> datetime:
+    """`value` mas un mes de calendario, que es el salto que acepta Clip.
+
+    Si el dia no existe en el mes siguiente (31 de enero -> febrero), se recorta
+    al ultimo dia de ese mes. Recortar es lo seguro: una ventana mas corta
+    siempre se puede pedir, una mas larga la API la rechaza con 400.
+    """
+    year = value.year + (1 if value.month == 12 else 0)
+    month = 1 if value.month == 12 else value.month + 1
+    # Ultimo dia del mes destino, sin usar calendar: el dia 28 existe siempre.
+    day = value.day
+    while day > 28:
+        try:
+            return value.replace(year=year, month=month, day=day)
+        except ValueError:
+            day -= 1
+    return value.replace(year=year, month=month, day=day)
+
+
 def split_window(start: datetime, end: datetime, *,
                  now: Optional[datetime] = None) -> List[Tuple[datetime, datetime]]:
-    """Parte `start`..`end` en ventanas que Clip acepta (<= 720 h cada una).
+    """Parte `start`..`end` en ventanas que Clip acepta (<= 1 mes cada una).
 
     Valida los dos limites de la API antes de gastar una llamada: el rango tiene
     que ir hacia adelante y no puede empezar hace mas de un ano.
@@ -243,7 +298,7 @@ def split_window(start: datetime, end: datetime, *,
     windows: List[Tuple[datetime, datetime]] = []
     cursor = start_utc
     while cursor < end_utc:
-        stop = min(cursor + MAX_WINDOW, end_utc)
+        stop = min(add_one_month(cursor), end_utc)
         windows.append((cursor, stop))
         cursor = stop
     return windows
@@ -656,6 +711,91 @@ def summarize_corte(rows: Sequence[Mapping[str, Any]], *, branch: str) -> Dict[s
     }
 
 
+def summarize_census(payments: Iterable[Mapping[str, Any]], *,
+                     branch: str) -> Dict[str, Any]:
+    """Censo de la taxonomia cruda que entrega la API. No carga nada.
+
+    Existe para contestar con dato, y no con memoria, la unica pregunta que se
+    repite en esta tarea: **?ya llega el efectivo?** (BOS-119). Agrupa por
+    `(payment_method, sub_type, card.brand, card.issuer, status)`, que es la
+    tupla donde apareceria si Clip empezara a mandarlo.
+
+    `efectivo_en_la_api` es el veredicto, y sale de contar renglones: el dia que
+    sea `true`, el efectivo ya viene y hay que cargarlo. Mientras sea `false`,
+    el total de este camino es un **piso**.
+
+    Tambien saca aparte los renglones **sin tarjeta identificable**, que son los
+    unicos candidatos a efectivo. Ojo con el `status`: medido en 360 dias, los
+    dos que existen son cancelaciones (`status` vacio), no efectivo.
+    """
+    buckets: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+    sin_tarjeta: List[Dict[str, Any]] = []
+    por_metodo: Dict[str, Dict[str, Any]] = {}
+    total = 0
+
+    for payment in payments:
+        total += 1
+        info = _card_info(payment)
+        method = _payment_method(payment)
+        status = _status(payment)
+        amount = _gross_amount(payment)
+
+        key = (
+            (_text(payment.get("payment_method")) or "(vacio)").upper(),
+            _text(payment.get("sub_type")) or "(vacio)",
+            info["brand"] or "(vacio)",
+            info["issuer"] or "(vacio)",
+            status,
+            method,
+        )
+        bucket = buckets.setdefault(key, {
+            "payment_method_api": key[0],
+            "sub_type": key[1],
+            "card_brand": key[2],
+            "card_issuer": key[3],
+            "status": status,
+            "payment_method": method,
+            "transactions": 0,
+            "gross_amount": 0.0,
+        })
+        bucket["transactions"] += 1
+        bucket["gross_amount"] = round(bucket["gross_amount"] + amount, 2)
+
+        # Solo lo cobrado suma: una cancelacion no es venta (ver `_status`).
+        if status == "paid":
+            agg = por_metodo.setdefault(method, {"transactions": 0, "gross_amount": 0.0})
+            agg["transactions"] += 1
+            agg["gross_amount"] = round(agg["gross_amount"] + amount, 2)
+
+        if not _has_card_identity(info):
+            sin_tarjeta.append({
+                "receipt_no": _text(payment.get("receipt_no")),
+                "occurred_at": _text(payment.get("created_at")),
+                "gross_amount": amount,
+                "status": status,
+                "sub_type": _text(payment.get("sub_type")),
+                "payment_method": method,
+            })
+
+    efectivo = por_metodo.get("efectivo", {}).get("transactions", 0)
+    return {
+        "branch": branch,
+        "transactions": total,
+        "by_taxonomy": sorted(buckets.values(),
+                              key=lambda b: (-b["transactions"], b["payment_method_api"])),
+        "gross_by_payment_method": por_metodo,
+        "rows_without_card": sin_tarjeta,
+        "efectivo_en_la_api": efectivo > 0,
+        "note": (
+            "efectivo_en_la_api: false -> el total de este camino es un piso. "
+            "Los renglones sin tarjeta con `status` vacio son cancelaciones, no efectivo."
+        ) if efectivo == 0 else (
+            "efectivo_en_la_api: true -> Clip ya manda efectivo; hay que cargarlo y "
+            "dejar de llamarle piso al total."
+        ),
+    }
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -695,6 +835,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     corte.add_argument("--from", dest="start", required=True)
     corte.add_argument("--to", dest="end", required=True)
 
+    census = sub.add_parser(
+        "census",
+        help="censo de la taxonomia cruda: contesta si ya llega efectivo (BOS-119)",
+    )
+    census.add_argument("--branch", required=True)
+    census.add_argument("--days", type=int, default=360,
+                        help="cuantos dias hacia atras (default 360; el tope de Clip es un ano)")
+
     args = parser.parse_args(argv)
 
     try:
@@ -716,6 +864,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "gross_amount": round(sum(r["gross_amount"] for r in rows if r["status"] == "paid"), 2),
                 "note": "La API no incluye efectivo; el corte queda corto por diseno.",
             }, indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "census":
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=max(1, args.days))
+            print(json.dumps(
+                summarize_census(iter_payments(credentials, start, end),
+                                 branch=credentials.branch),
+                indent=2, ensure_ascii=False))
             return 0
 
         if args.command == "corte":

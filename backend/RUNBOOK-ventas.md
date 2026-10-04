@@ -365,20 +365,31 @@ prueba truena en lugar de duplicar ventas en silencio.
 ## Donde esta el efectivo (medido, no supuesto)
 
 Gustavo lo dijo en BOS-119: los cobros en efectivo **si** se registran en Clip y
-se ven en la app. La pregunta era si viajan por la API. Medido el **2026-10-04**
-con las credenciales de las dos sucursales, pidiendo 360 dias mes por mes:
+se ven en la app. La pregunta era si viajan por la API. Cerrado el
+**2026-10-04** con un censo de la taxonomia **completa** (no una muestra): 360
+dias de las dos sucursales, deduplicado por folio, agrupado por
+`(payment_method, sub_type, card.brand, card.issuer, status)`. **2,329 cobros**:
 
 | | cobros | pesos |
 |---|---|---|
-| tarjeta bancaria (`DEBIT`/`CREDIT`) | 1,679 | $182,231.11 |
-| vales (`OTHER` con emisor: Pluxee, Edenred, Toka, Todito, Scotiabank) | 231 | $25,259.10 |
-| sin tarjeta identificable (`OTHER`, marca `XX`, `last4` `0000`) | 2 | $113.00 |
+| tarjeta bancaria (`DEBIT`/`CREDIT`) | 2,039 | $219,824.11 |
+| vales (`OTHER` con emisor: Pluxee, Edenred, Toka, Todito, Scotiabank) | 288 | $32,372.10 |
+| cancelaciones (`status` vacio — **no son venta**) | 2 | $113.00 |
+| sin tarjeta y **cobrados** | **0** | **$0.00** |
 | **rotulados efectivo** | **0** | **$0.00** |
 
-(Montos de consumo, sin propina. Una ventana de 30 dias
-—`2026-02-14..2026-03-15`— la API la contesto con `400 payclip.bad.request`, asi
-que ese mes no esta contado: no cambia el cero del efectivo, pero el total de
-pesos es piso tambien aqui.)
+(Montos de consumo, sin propina.) Reproducible con un comando, que es el punto:
+el dia que Clip empiece a mandar efectivo, el veredicto cambia solo.
+
+```
+python backend/clip_api.py census --branch sji --days 360
+python backend/clip_api.py census --branch tecnoparque --days 360
+```
+
+El campo que hay que leer es **`efectivo_en_la_api`**. Mientras sea `false`, el
+total de este camino es un piso; el dia que sea `true`, hay que cargar el
+efectivo y dejar de rotular piso. `rows_without_card` saca aparte los unicos
+candidatos a efectivo, con su `status` al lado.
 
 Dos cosas salen de ahi:
 
@@ -393,6 +404,20 @@ Dos cosas salen de ahi:
    `status` llega vacio, y el de $108.00 del 21/09 Gustavo lo reconocio como
    "cancelacion de pago con tarjeta". Estaban cargados como venta porque
    `classify_status("")` dice `"paid"`; ver abajo.
+
+   El censo lo cierra sin dejar duda: los **dos** renglones sin tarjeta del año
+   traen la misma firma —`sub_type: "CONSUMER"`, marca `XX`, `last4` `0000`, y
+   `status` **vacio**—, o sea que una cancelacion llega sin identidad de
+   tarjeta. Eso explica la forma sin tener que suponerle efectivo, y deja el
+   cajon "sin tarjeta y cobrado" en **cero renglones en 360 dias**.
+
+   Y no es una limitante de nuestra credencial: lo dice la **documentacion de
+   Clip**. La [guia de conciliacion](https://developer.clip.mx/docs/conciliacion-de-transacciones-apis-1)
+   pone el recibo de un cobro en efectivo en la app, el panel, los reportes
+   descargables y el correo de confirmacion — y en **ningun** endpoint. La doc
+   de transacciones ademas dice que `OTHER` es "la tarjeta no es de debito ni
+   credito, por ejemplo, tarjeta de vales **y pago en efectivo**": el esquema
+   admite efectivo en ese cajon, pero en un año no llego ni uno.
 2. **La coleccion de efectivo existe, pero no para esta llave.** `GET /cash`
    (y `/cash/payments`, `/cash/register`) contestan `403` con
    *"Authorization header requires 'Credential' parameter"* — el gateway pide
@@ -430,7 +455,13 @@ Descargar`), que tiene columna de metodo de pago: `clip_import.py` ya la lee y
 efectivo es un comando.
 
 Pero Gustavo pidio (BOS-119, 04/10) **no** empezar por pedirle archivos: que se
-siga buscando por API/app. Los tres caminos que quedan, de menos a mas costo:
+siga buscando por API/app. **Ese camino ya se agoto y quedo cerrado**, y no por
+falta de intentos sino por contrato: el censo de 2,329 cobros da cero efectivo,
+y la propia guia de conciliacion de Clip pone el recibo del efectivo en la app,
+el panel, los reportes y el correo — en ningun endpoint. Insistir mas en la API
+de pagos es buscar donde el proveedor ya dijo que no esta.
+
+Los tres caminos que quedan, de menos a mas costo:
 
 1. **Credencial del panel como secreto de Paperclip.** El panel es una
    aplicacion web con su propia API, y ahi si vive el efectivo. Requiere que
@@ -480,6 +511,22 @@ idempotente (la segunda corrida da `to_update: 0`). Corrido el 2026-10-04:
 
 ## Limites conocidos
 
+- **La ventana maxima de la API es un mes de calendario, no "720 horas".** La
+  doc de Clip dice 720 h y eso es falso en febrero. Medido el 2026-10-04
+  (BOS-119), con el mismo dia y la misma hora:
+
+  | `from` | `to` | dias | respuesta |
+  |---|---|---|---|
+  | 2026-01-06 22:08 | 2026-02-06 22:08 | 31 | `200` |
+  | 2026-01-06 22:08 | 2026-02-07 22:08 | 32 | `400` |
+  | 2026-02-06 22:08 | 2026-03-06 22:08 | 28 | `200` |
+  | 2026-02-06 22:08 | 2026-03-06 **23:08** | 28 h+1 | `400` |
+
+  O sea `to <= from + 1 mes`. Un delta fijo de 720 h es **mas largo** que un mes
+  de calendario solo cuando la ventana arranca en febrero, y ahi la API contesta
+  `400 payclip.bad.request` y se lleva el jalon completo: una mina que explota
+  una vez al año, justo en una carga de un año de dinero. `split_window` ya
+  avanza por mes de calendario (`add_one_month`), con prueba de regresion.
 - El mongod es local a la maquina. **El dia que la app se despliegue hace falta
   una base accesible desde internet** (Atlas u otra). No es camino de ida: la
   base se copia.

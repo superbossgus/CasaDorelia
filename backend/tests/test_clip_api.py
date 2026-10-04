@@ -2,7 +2,7 @@
 Pruebas del cliente de la API de Clip (`backend/clip_api.py`).
 
 Unitarias y **sin red**: el transporte HTTP se inyecta, asi que se puede probar
-la paginacion, el corte de ventanas de 720 h, los errores de credencial y el
+la paginacion, el corte de ventanas de un mes, los errores de credencial y el
 mapeo de montos sin credenciales reales y sin pegarle a Clip.
 
     python -m pytest backend/tests/test_clip_api.py -q
@@ -22,6 +22,7 @@ from clip_api import (  # noqa: E402
     ClipAuthError,
     ClipCredentials,
     ClipRateLimitError,
+    add_one_month,
     branch_slug,
     build_payments_url,
     credential_env_names,
@@ -30,6 +31,7 @@ from clip_api import (  # noqa: E402
     load_credentials,
     map_payment,
     split_window,
+    summarize_census,
     summarize_corte,
 )
 from sales_import import SOURCE_CLIP_API, normalize_row, plan_import  # noqa: E402
@@ -135,18 +137,45 @@ def test_el_repr_no_filtra_la_credencial():
 # Ventanas y URL
 # --------------------------------------------------------------------------
 
-def test_rango_largo_se_parte_en_ventanas_de_720_horas():
+def test_rango_largo_se_parte_en_ventanas_de_un_mes():
     start = datetime(2026, 7, 1, tzinfo=timezone.utc)
     end = datetime(2026, 10, 1, tzinfo=timezone.utc)
     windows = split_window(start, end, now=NOW)
-    assert len(windows) == 4
+    assert len(windows) == 3
     assert windows[0][0] == start
     assert windows[-1][1] == end
     for window_start, window_end in windows:
-        assert window_end - window_start <= timedelta(hours=720)
+        assert window_end <= add_one_month(window_start)
     # Sin huecos ni traslapes: el final de una es el inicio de la siguiente.
     for previous, following in zip(windows, windows[1:]):
         assert previous[1] == following[0]
+
+
+def test_ninguna_ventana_pasa_de_un_mes_de_calendario_ni_en_febrero():
+    """La regresion de BOS-119: 720 h es mas que un mes si se arranca en febrero.
+
+    Con un delta fijo de 720 h, la ventana que arranca el 6 de febrero termina
+    el 8 de marzo y Clip contesta 400 (medido). Eso tumbaba el jalon completo de
+    un año de dinero una vez al año.
+    """
+    windows = split_window(datetime(2026, 2, 6, 22, 8, tzinfo=timezone.utc),
+                           datetime(2026, 4, 10, 22, 8, tzinfo=timezone.utc),
+                           now=datetime(2026, 4, 11, tzinfo=timezone.utc))
+    assert windows[0][1] == datetime(2026, 3, 6, 22, 8, tzinfo=timezone.utc)
+    for window_start, window_end in windows:
+        assert window_end <= add_one_month(window_start)
+
+
+def test_un_mes_mas_adelante_recorta_el_dia_que_no_existe():
+    # 31 de enero + 1 mes no es el 31 de febrero: se recorta al 28.
+    assert add_one_month(datetime(2026, 1, 31, 7, 0, tzinfo=timezone.utc)) == \
+        datetime(2026, 2, 28, 7, 0, tzinfo=timezone.utc)
+    # Y en año bisiesto, al 29.
+    assert add_one_month(datetime(2028, 1, 31, tzinfo=timezone.utc)) == \
+        datetime(2028, 2, 29, tzinfo=timezone.utc)
+    # Diciembre cambia de año.
+    assert add_one_month(datetime(2026, 12, 15, tzinfo=timezone.utc)) == \
+        datetime(2027, 1, 15, tzinfo=timezone.utc)
 
 
 def test_rango_corto_es_una_sola_ventana():
@@ -527,6 +556,67 @@ def test_el_corte_no_cuenta_una_cancelada_y_declara_que_falta_el_efectivo():
     assert corte["skipped_reasons"] == {"no_cobrada:reversed": 1}
     assert corte["cash_coverage"]["includes_cash"] is False
     assert corte["gross_by_payment_method"] == {"tarjeta": 116.0}
+
+
+# --------------------------------------------------------------------------
+# Censo de la taxonomia: el veredicto sobre el efectivo (BOS-119)
+# --------------------------------------------------------------------------
+
+def test_el_censo_dice_que_no_hay_efectivo_cuando_no_hay():
+    censo = summarize_census([payment(), payment(receipt_no="X2", payment_method="DEBIT")],
+                             branch="sji")
+    assert censo["efectivo_en_la_api"] is False
+    assert censo["rows_without_card"] == []
+    assert "piso" in censo["note"]
+
+
+def test_un_renglon_sin_tarjeta_con_status_vacio_es_cancelacion_no_efectivo():
+    """La forma exacta de los dos unicos renglones sin tarjeta del año."""
+    censo = summarize_census([payment(
+        receipt_no="PhUFnfD5",
+        status="",
+        payment_method="OTHER",
+        sub_type="CONSUMER",
+        amount=5.0,
+        tip=0.0,
+        total=5.0,
+        card={"brand": "XX", "issuer": None, "last4": "0000"},
+    )], branch="sji")
+
+    assert censo["efectivo_en_la_api"] is False
+    assert len(censo["rows_without_card"]) == 1
+    fila = censo["rows_without_card"][0]
+    assert fila["status"] == "reversed"       # cancelada, no cobrada
+    assert fila["payment_method"] == "otro"   # nunca "efectivo"
+    # Y no suma un peso a lo cobrado.
+    assert censo["gross_by_payment_method"] == {}
+
+
+def test_el_dia_que_clip_mande_efectivo_el_censo_lo_grita():
+    """El veredicto se **calcula**: no hay que tocar codigo para que cambie."""
+    censo = summarize_census([payment(receipt_no="EF1", payment_method="CASH",
+                                      card={"brand": "XX", "last4": "0000"})],
+                             branch="sji")
+    assert censo["efectivo_en_la_api"] is True
+    assert censo["gross_by_payment_method"]["efectivo"]["transactions"] == 1
+    assert "ya manda efectivo" in censo["note"]
+
+
+def test_el_censo_separa_vales_de_tarjeta_y_no_cruza_estados():
+    censo = summarize_census([
+        payment(receipt_no="V1", payment_method="OTHER", sub_type="QPS",
+                amount=100.0, tip=0.0, total=100.0,
+                card={"brand": "CR", "issuer": "PLUXEE MEXICO", "last4": "1234"}),
+        payment(receipt_no="T1", amount=50.0, tip=0.0, total=50.0),
+        payment(receipt_no="C1", status="cancelled", amount=999.0, tip=0.0, total=999.0),
+    ], branch="tecnoparque")
+
+    assert censo["transactions"] == 3
+    assert censo["gross_by_payment_method"]["vales"]["gross_amount"] == 100.0
+    assert censo["gross_by_payment_method"]["tarjeta"]["gross_amount"] == 50.0
+    # La cancelada aparece en la taxonomia pero no en lo cobrado.
+    assert 999.0 not in [b["gross_amount"] for b in censo["gross_by_payment_method"].values()]
+    assert any(b["status"] == "reversed" for b in censo["by_taxonomy"])
 
 
 def test_tope_de_paginas_por_ventana():

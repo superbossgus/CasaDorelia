@@ -236,6 +236,52 @@ python backend/brands.py --db casa_dorelia
 Sale con codigo 1 si algun control del dato quedo en rojo, para que un cron se
 entere sin que alguien tenga que leer el HTML.
 
+### Republicar el tablero (el enlace que abre Gustavo)
+
+El tablero es un HTML generado, o sea una **foto**: no se mueve solo. El enlace
+publicado en la tarjeta de BOS-143 es un work product `artifact`, y lo que lo
+mantiene al dia es este comando, que corre despues de cada carga de Clip:
+
+```
+python backend/publish_dashboard.py --db casa_dorelia \
+    --apertura backend/apertura-sji.json \
+    --issue d79395ba-11be-4c90-a607-db79c74c639e \
+    --work-product 853436f7-9720-4a68-8dfa-ddc8c4cfcdf6
+```
+
+Tres pasos: regenera el HTML, lo sube como adjunto, y **repunta el work product
+al adjunto nuevo**. El tercero es el que importa. Sin el, cada corrida deja un
+adjunto mas y el enlace publicado sigue siendo el primero: a los 15 dias habria
+30 adjuntos y la cifra que alguien abre seguiria siendo la del `04/10`. El
+comando confirma el `attachmentId` que el servidor echa de vuelta, porque un
+`PATCH` que contesta 200 y deja el work product apuntando al adjunto viejo es
+indistinguible de uno bueno — y es la forma silenciosa de publicar en falso.
+
+**Va aparte de `clip_daily.py` a proposito.** El cargador toca dinero; un tablero
+que no se pudo publicar no debe poder cambiar el codigo de salida de una carga
+que si entro, porque ese codigo es lo que decide si el corte de las 08:00 confia
+en la cifra del dia. Son dos invocaciones: la segunda ya no puede alterar el
+resultado de la primera. En la rutina, **lee y reporta el resultado de la carga
+antes** de republicar; no encadenes las dos con `&&` ni leas un solo
+`$LASTEXITCODE` al final.
+
+Si la republicacion se cae (`exit 1` con la causa en una linea), el enlace sigue
+abriendo el tablero anterior. Eso no es silencioso: la pagina calcula su propia
+edad al abrirse y, pasadas `STALE_AFTER_HOURS` (13 h, que es el hueco de 12 h
+entre las dos republicaciones mas margen), pone arriba de todo *«Este tablero se
+genero hace N horas. No es la venta de hoy.»*. Esa cuenta es la unica defensa que
+sigue en pie cuando lo que fallo es justamente lo que debia actualizarla.
+
+Si el panel de apertura no cuadra (`load_apertura` es estricto: los conteos de
+`apertura-sji.json` tienen que cuadrar con la hoja), el republicado **no** se
+cae: publica la venta fresca sin panel y dibuja la razon en la tarjeta. Tumbar la
+republicacion ahi dejaria publicado el tablero de ayer, que es peor: cambiaria un
+dato viejo rotulado por un dato viejo sin rotular. A mano sigue tronando — quien
+corre `dashboard.py` a proposito quiere enterarse del desfase, y para el otro
+comportamiento esta `--apertura-optional`.
+
+Para ver que saldria sin publicar nada: `--dry-run`.
+
 ## Corte del dia (solo lectura, no escribe)
 
 ```

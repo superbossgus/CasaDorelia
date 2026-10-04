@@ -60,6 +60,20 @@ conteo que vive aqui deja de depender de que alguien abra una tarjeta.
 el total de la hoja) y calcula la antiguedad del corte, para que el panel no
 pueda decir "al dia" porque alguien escribio eso una vez.
 
+Con `--apertura-optional` esa validacion deja de ser fatal: el panel se cae solo
+y la tarjeta publica la razon. Es para el republicado automatico, donde la
+alternativa a un panel desfasado no es "ningun tablero" sino el tablero de ayer
+(ver `load_apertura_degrading`).
+
+### Que esta pagina no puede hacer sola
+
+Es un HTML generado: **no se actualiza solo**. Quien lo publica tiene que volver
+a generarlo despues de cada carga (eso vive en `publish_dashboard.py`, BOS-144).
+Lo que si hace la pagina es delatarse: calcula su propia edad al abrirla y, si
+paso de `STALE_AFTER_HOURS`, pone arriba de todo que no es la venta de hoy. Esa
+cuenta es la unica defensa que sigue en pie cuando lo que fallo es justamente la
+republicacion.
+
 ### Correrlo
 
     python backend/dashboard.py --db casa_dorelia
@@ -102,6 +116,12 @@ MORNING_CATCHUP_LOCAL = "07:45"
 # Que tan pegada a la foto de las 19:45 tiene que estar la ultima venta para
 # dudar del cierre del dia. Medido: 51 min antes => cerrado; 4 min => dudoso.
 SNAPSHOT_MARGIN_MINUTES = 30
+
+# A partir de cuantas horas de generado el tablero se declara viejo **al
+# abrirlo**. Sale de las dos republicaciones (07:45 y 19:45): el hueco mas largo
+# entre una y otra es de 12 h, asi que una pagina de mas de 13 h es prueba de que
+# una republicacion no corrio. No es un numero de gusto: es el hueco + margen.
+STALE_AFTER_HOURS = 13
 
 # Orden fijo de la paleta categorica (slots 1 y 2 del sistema de diseño), con su
 # paso para fondo oscuro. Se asigna por slug ordenado alfabeticamente, no por
@@ -280,10 +300,33 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
     }
 
 
+def load_apertura_degrading(path: Optional[str]) -> tuple:
+    """`load_apertura` que devuelve su falla en vez de levantarla.
+
+    Devuelve `(apertura, error)`: a lo mas uno de los dos es distinto de `None`.
+    Sin `path` son los dos nulos — nadie pidio panel.
+
+    Esta es la forma que usa el republicado automatico (BOS-144), y la razon es
+    una sola: ahi la alternativa a un panel desfasado no es "ningun tablero", es
+    **el tablero de ayer**, que es el que ya esta publicado. Dejar congelado el
+    enlace para proteger un conteo de pendientes seria cambiar un dato viejo
+    rotulado por un dato viejo sin rotular. A mano sigue tronando (ver `main`):
+    quien corre el comando a proposito quiere enterarse de que el JSON se
+    desfaso, no publicar sin panel.
+    """
+    if not path:
+        return None, None
+    try:
+        return load_apertura(path), None
+    except DashboardError as exc:
+        return None, str(exc)
+
+
 def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 today: Optional[str] = None, now: Optional[datetime] = None,
                 db_name: Optional[str] = None,
-                apertura: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+                apertura: Optional[Mapping[str, Any]] = None,
+                apertura_error: Optional[str] = None) -> Dict[str, Any]:
     """Arma el modelo completo del tablero. Pura: recibe documentos, no una conexion.
 
     Devuelve ya listo lo que la pagina dibuja, incluida la lista de limites del
@@ -293,6 +336,16 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
 
     `apertura` es el panel de pendientes operativos (ver `load_apertura`). No
     sale de `sales` porque no es venta: viaja en su propio archivo y es opcional.
+
+    `apertura_error` es el caso de en medio, y existe por el republicado
+    automatico (BOS-144). `load_apertura` truena a proposito cuando los conteos
+    del JSON ya no cuadran con la hoja, y eso es correcto a mano. Pero en la
+    republicacion que corre despues de cada carga de Clip, tumbar el tablero
+    entero por un panel desfasado dejaria publicada **la venta de ayer**: el
+    enlace no se rompe, se congela, que es exactamente la averia que BOS-144
+    viene a cerrar. Asi que ahi el panel se cae solo y su razon viaja en el
+    modelo, para que la tarjeta diga por que falta en lugar de desaparecer sin
+    ruido. Un panel ausente y callado se lee como "ya no falta nada".
     """
     rows = list(sales)
     now = now or datetime.now(timezone.utc)
@@ -470,6 +523,10 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         # por el siguiente que toque la plantilla. Lo unico que cruza marcas es
         # `rows_counted`, que es un conteo de renglones, no pesos.
         "apertura": dict(apertura) if apertura else None,
+        # Por que falta el panel, cuando falta por una falla y no porque no se
+        # pidio. `None` en los dos campos = nadie pidio panel; `apertura_error`
+        # con `apertura` nulo = se pidio y se cayo, y la tarjeta lo dice.
+        "apertura_error": apertura_error if apertura is None else None,
         "quality": {"checks": checks},
         "limits": {
             # Calculados, no escritos a mano: el dia que el dato cambie, el
@@ -485,6 +542,7 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
             "snapshot_local": SNAPSHOT_LOCAL,
             "morning_catchup_local": MORNING_CATCHUP_LOCAL,
             "snapshot_margin_minutes": SNAPSHOT_MARGIN_MINUTES,
+            "stale_after_hours": STALE_AFTER_HOURS,
         },
     }
 
@@ -550,20 +608,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--apertura", default=None, metavar="ARCHIVO.json",
                         help="panel de pendientes de apertura (ver load_apertura); "
                              "si se omite, el tablero sale solo con la venta")
+    parser.add_argument("--apertura-optional", action="store_true",
+                        help="si el panel de apertura no cuadra, publicar el tablero "
+                             "sin panel (y con la razon a la vista) en vez de fallar; "
+                             "es lo que usa el republicado automatico")
     parser.add_argument("--json", action="store_true",
                         help="imprime el modelo en JSON en vez de escribir el HTML")
 
     args = parser.parse_args(argv)
 
     try:
-        apertura = load_apertura(args.apertura) if args.apertura else None
+        if args.apertura_optional:
+            apertura, apertura_error = load_apertura_degrading(args.apertura)
+        else:
+            apertura = load_apertura(args.apertura) if args.apertura else None
+            apertura_error = None
         sales = open_sales_collection(args.mongo_url, args.db)
         db_name = args.db or os.environ.get("DB_NAME")
         model = build_model(sales.find({}, {"_id": 0}), title=args.title,
-                            db_name=db_name, apertura=apertura)
+                            db_name=db_name, apertura=apertura,
+                            apertura_error=apertura_error)
     except DashboardError as exc:
         print(f"ERROR: {exc}")
         return 1
+    if apertura_error:
+        print(f"AVISO panel de apertura omitido: {apertura_error}")
 
     if args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -655,6 +724,18 @@ _TEMPLATE = r"""<!DOCTYPE html>
     border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
   .floor-note strong { color: var(--text-primary); }
+  /* La edad del tablero, medida al abrirlo. Un HTML generado no se actualiza
+     solo: si la republicacion se cayo, este renglon es lo unico que distingue
+     "la venta de hoy" de una foto de anteayer. Va arriba de todo, en color de
+     alerta, porque leer una cifra vieja como si fuera de hoy es el error caro. */
+  .stale-note { margin: 16px 0 0; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--critical); background: var(--surface-1);
+    color: var(--text-primary); font-size: 13px; line-height: 1.5; }
+  .stale-note strong { color: var(--critical); }
+  .apertura-error { color: var(--text-secondary); font-size: 13px; line-height: 1.5;
+    margin: 0; }
+  .apertura-error strong { color: var(--critical); }
+  .apertura-error code { color: var(--text-primary); }
 
   button {
     font: inherit; font-size: 13px; color: var(--text-secondary);
@@ -784,6 +865,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <button class="theme" id="theme" type="button">Modo oscuro</button>
   </header>
 
+  <p class="stale-note" id="stale-note" hidden></p>
+
   <p class="floor-note" id="floor-note"></p>
 
   <div class="filters" id="filters" role="group" aria-label="Filtros del tablero">
@@ -802,6 +885,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   <section class="card" id="apertura-card" hidden>
     <h2 id="apertura-title"></h2>
     <p class="hint" id="apertura-hint"></p>
+    <p class="apertura-error" id="apertura-error" hidden></p>
     <div class="open-head" id="apertura-head"></div>
     <ul class="open-list" id="apertura-blockers"></ul>
     <div class="open-rest" id="apertura-rest" hidden>
@@ -1453,8 +1537,25 @@ _TEMPLATE = r"""<!DOCTYPE html>
   // vacia: un panel en blanco se lee como "ya no falta nada".
   function renderApertura() {
     var A = M.apertura;
-    if (!A) { return; }
     var card = document.getElementById("apertura-card");
+    // El panel se pidio y se cayo: la tarjeta aparece **con la razon**, no se
+    // esconde. Esconderla dejaria un tablero identico al de un dia sin
+    // bloqueantes, y "ya no falta nada" es la lectura mas cara posible.
+    if (!A && M.apertura_error) {
+      card.hidden = false;
+      document.getElementById("apertura-title").textContent =
+        "Panel de apertura: no se pudo armar";
+      document.getElementById("apertura-hint").textContent =
+        "La venta de abajo si esta al dia. Lo que falta es el conteo de " +
+        "pendientes, y falta por esto:";
+      var err = document.getElementById("apertura-error");
+      err.hidden = false;
+      err.textContent = "";
+      err.appendChild(el("strong", null, "No dice que no falte nada: "));
+      err.appendChild(el("span", null, M.apertura_error));
+      return;
+    }
+    if (!A) { return; }
     card.hidden = false;
     document.getElementById("apertura-title").textContent = A.title;
     document.getElementById("apertura-hint").textContent = A.hint || "";
@@ -1589,6 +1690,36 @@ _TEMPLATE = r"""<!DOCTYPE html>
     });
   }
 
+  // La edad del tablero, medida **al abrirlo**, no al generarlo.
+  //
+  // Por que no basta el "generado 04/10 21:19" del subtitulo: un HTML generado
+  // es una foto, y una foto no se queja de estar vieja. El dia que la
+  // republicacion de BOS-144 se caiga, el enlace sigue abriendo igual de bonito
+  // con la venta de anteayer, y el lector que busca "cuanto vendimos" no hace la
+  // resta de fechas en la cabeza. Esta cuenta la hace la pagina: es la unica
+  // defensa que sigue funcionando cuando lo que fallo es justamente lo que
+  // deberia haberla actualizado.
+  function renderAge() {
+    var node = document.getElementById("stale-note");
+    var gen = new Date(M.generated_at);
+    if (isNaN(gen.getTime())) { return; }
+    var hours = (Date.now() - gen.getTime()) / 3600000;
+    if (!(hours >= M.config.stale_after_hours)) { return; }
+    var age = hours < 48
+      ? Math.round(hours) + (Math.round(hours) === 1 ? " hora" : " horas")
+      : Math.floor(hours / 24) + " dias";
+    node.hidden = false;
+    node.textContent = "";
+    node.appendChild(el("strong", null,
+      "Este tablero se genero hace " + age + ". No es la venta de hoy. "));
+    node.appendChild(el("span", null,
+      "Se republica a las " + M.config.morning_catchup_local + " y " +
+      M.config.snapshot_local + " CDMX despues de cada carga de Clip, asi que una " +
+      "pagina de mas de " + M.config.stale_after_hours + " h quiere decir que una " +
+      "republicacion no corrio. Las cifras de abajo son las del " +
+      shortDay(M.today) + ", cerradas a esa hora: no las leas como las de hoy."));
+  }
+
   function renderHeader() {
     document.getElementById("title").textContent = M.title;
     var span = M.days.length
@@ -1597,6 +1728,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     document.getElementById("subtitle").textContent =
       span + " · " + NUM.format(M.rows_counted) + " cobros · generado " +
       M.generated_at_label + (M.db_name ? " · base " + M.db_name : "");
+
+    renderAge();
 
     var note = document.getElementById("floor-note");
     note.textContent = "";

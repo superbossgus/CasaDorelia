@@ -406,3 +406,96 @@ def test_el_panel_no_rompe_el_autocontenido_de_la_pagina(tmp_path):
     for remote in ("src=", "@import", "fetch(", "XMLHttpRequest", "@font-face",
                    "//cdn"):
         assert remote not in html, f"el tablero dejo de ser autocontenido: {remote}"
+
+
+# --------------------------------------------------------------------------
+# 6. Un panel que no cuadra no se lleva el tablero entero (BOS-144)
+# --------------------------------------------------------------------------
+#
+# El republicado automatico corre despues de cada carga de Clip. Ahi la
+# alternativa a un panel desfasado **no** es "ningun tablero": es el tablero de
+# ayer, que es el que ya esta publicado. Tumbar la republicacion para proteger un
+# conteo de pendientes cambiaria un dato viejo rotulado por un dato viejo sin
+# rotular, que es la averia que BOS-144 viene a cerrar.
+
+def test_a_mano_un_panel_que_no_cuadra_sigue_tronando(tmp_path):
+    # La forma estricta no se relaja: quien corre el comando a proposito quiere
+    # enterarse de que el JSON se desfaso, no publicar sin panel.
+    with pytest.raises(DashboardError):
+        load_apertura(apertura_file(tmp_path, source={"rows": 9}))
+
+
+def test_el_republicado_se_queda_sin_panel_pero_no_sin_tablero(tmp_path):
+    from dashboard import load_apertura_degrading
+
+    apertura, error = load_apertura_degrading(
+        apertura_file(tmp_path, source={"rows": 9}))
+    assert apertura is None
+    assert "no cuadra" in error
+
+    m = model([sale("2026-10-03", 200.0)])
+    m = dict(m, apertura=None, apertura_error=error)
+    html = render_html(m)
+    # La venta sigue publicada...
+    assert series_of(m, "casa-dorelia")["2026-10-03"]["gross"] == 200.0
+    # ...y la razon de que falte el panel viaja en la pagina, no en un log que
+    # nadie abre. Sin esto la tarjeta desaparece y el tablero queda identico al
+    # de un dia sin bloqueantes: "ya no falta nada" es la lectura mas cara.
+    assert "no cuadra" in html
+
+
+def test_sin_archivo_de_apertura_no_hay_error_que_reportar():
+    from dashboard import load_apertura_degrading
+
+    # Nadie pidio panel: los dos campos nulos. Es distinto de "se pidio y fallo",
+    # y la pagina los dibuja distinto (tarjeta oculta vs tarjeta con la razon).
+    assert load_apertura_degrading(None) == (None, None)
+    m = model([sale("2026-10-03", 200.0)])
+    assert m["apertura"] is None and m["apertura_error"] is None
+    assert 'id="apertura-card" hidden' in render_html(m)
+
+
+def test_el_error_del_panel_no_se_publica_si_el_panel_si_salio(tmp_path):
+    from datetime import datetime, timezone
+
+    # Un `apertura_error` colgado junto a un panel bueno diria que falta algo que
+    # esta ahi. El modelo lo descarta en vez de dibujar los dos.
+    a = load_apertura(apertura_file(tmp_path),
+                      now=datetime(2026, 10, 4, 18, 0, tzinfo=timezone.utc))
+    m = build_model([sale("2026-10-03", 200.0)], title="t", today="2026-10-04",
+                    apertura=a, apertura_error="algo que ya no aplica")
+    assert m["apertura"] is not None
+    assert m["apertura_error"] is None
+
+
+# --------------------------------------------------------------------------
+# 7. La pagina dice su propia edad al abrirla, no al generarla (BOS-144)
+# --------------------------------------------------------------------------
+
+def test_el_umbral_de_vejez_sale_del_hueco_entre_republicaciones():
+    from dashboard import STALE_AFTER_HOURS
+
+    # 07:45 y 19:45: el hueco mas largo entre republicaciones es de 12 h, asi que
+    # el umbral tiene que estar arriba de 12 (si no, un tablero sano se declara
+    # viejo cada tarde) y lo bastante cerca para que una republicacion perdida se
+    # note el mismo dia. No es un numero de gusto.
+    assert _minutos(SNAPSHOT_LOCAL) - _minutos(MORNING_CATCHUP_LOCAL) == 12 * 60
+    assert 12 < STALE_AFTER_HOURS <= 24
+
+
+def _minutos(hhmm):
+    hora, minuto = hhmm.split(":")
+    return int(hora) * 60 + int(minuto)
+
+
+def test_la_pagina_lleva_lo_necesario_para_calcular_su_edad_sola():
+    m = model([sale("2026-10-03", 200.0)])
+    html = render_html(m)
+
+    # El calculo es del lado del lector: `generated_at` es absoluto y con huso,
+    # para que la resta contra `Date.now()` no dependa de la zona del navegador.
+    assert m["generated_at"].endswith("-06:00")
+    assert m["config"]["stale_after_hours"] == 13
+    # Y el aviso nace oculto: un tablero recien generado no se acusa de viejo.
+    assert 'id="stale-note" hidden' in html
+    assert "stale_after_hours" in html

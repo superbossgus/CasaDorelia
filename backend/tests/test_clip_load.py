@@ -134,3 +134,55 @@ def test_sin_db_name_dice_que_falta_en_vez_de_adivinar(monkeypatch):
     monkeypatch.delenv("DB_NAME", raising=False)
     with pytest.raises(ClipLoadError, match="DB_NAME"):
         open_sales_collection("mongodb://127.0.0.1:27017", None)
+
+
+def test_un_mongod_apagado_dice_como_levantarlo(monkeypatch):
+    """El error de pymongo no sirve de nada a las 19:45: tiene que decir que hacer.
+
+    Crudo sube como `ServerSelectionTimeoutError`, que `clip_daily.main` no
+    atrapa, asi que un mongod caido terminaba en traceback y el corte de las
+    20:00 salia sin cifra sin explicacion (BOS-140).
+    """
+    def cliente_muerto(url, **kwargs):
+        class Admin:
+            def command(self, _):
+                raise RuntimeError("No replica set members available")
+
+        class Client:
+            admin = Admin()
+
+        return Client()
+
+    monkeypatch.setattr("pymongo.MongoClient", cliente_muerto)
+    with pytest.raises(ClipLoadError, match="Start-Service MongoDB"):
+        open_sales_collection("mongodb://127.0.0.1:27017", "casa_dorelia")
+
+
+def test_la_espera_cubre_la_escalera_de_reintentos_del_servicio(monkeypatch):
+    """El servicio reintenta a los 5, 10 y 30 s: esperar 5 s fallaba sin razon.
+
+    Si alguien vuelve a bajar este numero, una carga que dispara durante el
+    reinicio automatico falla aunque la base vuelva sola.
+    """
+    visto = {}
+
+    def espiar(url, **kwargs):
+        visto.update(kwargs)
+
+        class Client:
+            class admin:
+                @staticmethod
+                def command(_):
+                    return {"ok": 1}
+
+            def __getitem__(self, _):
+                class Db:
+                    sales = object()
+                return Db()
+
+        return Client()
+
+    monkeypatch.setattr("pymongo.MongoClient", espiar)
+    open_sales_collection("mongodb://127.0.0.1:27017", "casa_dorelia")
+
+    assert visto["serverSelectionTimeoutMS"] >= 45_000

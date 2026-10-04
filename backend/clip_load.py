@@ -165,8 +165,23 @@ def open_sales_collection(mongo_url: Optional[str] = None, db_name: Optional[str
         raise ClipLoadError(
             "falta `DB_NAME` (o --db): no se adivina a que base se cargan las ventas"
         )
-    client = MongoClient(url, serverSelectionTimeoutMS=5000)
-    client.admin.command("ping")  # falla aqui, no a medio insert
+    # 45 s, no 5: el servicio MongoDB de Windows ahora reintenta a los 5, 10 y 30
+    # segundos cuando se cae (BOS-140). Con 5 s de espera, una carga que dispara
+    # justo durante ese reinicio fallaba aunque la base volviera sola dos
+    # segundos despues. La espera cubre la escalera completa de reintentos; en
+    # una base de verdad muerta solo retrasa el error, que a un disparo
+    # programado no le cuesta nada.
+    client = MongoClient(url, serverSelectionTimeoutMS=45_000)
+    try:
+        client.admin.command("ping")  # falla aqui, no a medio insert
+    except Exception as exc:  # pragma: no cover - depende del entorno
+        # Sin esto el error de pymongo sube crudo: `clip_daily.main` solo atrapa
+        # `ClipLoadError`, asi que un mongod apagado terminaba en traceback y el
+        # corte se quedaba sin cifra sin que nadie supiera por que.
+        raise ClipLoadError(
+            f"el mongod de {url} no responde ({type(exc).__name__}). "
+            "Si es el local de Windows: Start-Service MongoDB"
+        ) from exc
     return client[name].sales
 
 

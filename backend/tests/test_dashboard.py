@@ -4,9 +4,10 @@ Estas pruebas no cuidan pixeles: cuidan que el tablero siga sin poder hacer las
 cuatro cosas por las que una cifra de este negocio se lee mal.
 
 1. **Un total consolidado.** Las dos marcas de `casa_dorelia` tienen repartos
-   distintos (ver `test_brands.py`). La suma solo existe con el nombre
-   `control_sum`; no hay ningun campo que se llame "total" y se pueda pegar en
-   un reporte como "la venta".
+   distintos (ver `test_brands.py`). La suma de dinero de las dos no existe en
+   ninguna parte del modelo: ni con ese nombre, ni rotulada como "suma de
+   control". Un campo que vive en el JSON acaba dibujado por el siguiente que
+   toque la plantilla, asi que la prueba busca el *valor*, no el nombre.
 2. **Un cero que en realidad es un hueco.** Antes del primer dia de una marca no
    hay dato; un dia que ya paso sin cobro si es un cero; y el dia en curso
    **todavia no es nada**. Los tres se ven distinto, porque dibujar el dia de
@@ -33,6 +34,7 @@ from dashboard import (  # noqa: E402
     DashboardError,
     build_model,
     day_states,
+    load_apertura,
     render_html,
 )
 
@@ -89,14 +91,29 @@ def test_cada_marca_tiene_su_renglon_y_su_color():
     assert m["brands"][0]["color"] != m["brands"][1]["color"]
 
 
-def test_la_suma_de_las_dos_solo_existe_como_suma_de_control():
+def test_la_suma_de_dinero_de_las_dos_marcas_no_existe_en_el_modelo():
     m = model([sale("2026-10-01", 100.0, brand="casa-dorelia"),
                sale("2026-10-01", 300.0, brand="le-pain-dore")])
 
-    assert m["control_sum"]["gross"] == 400.0
-    # Lo que protege el nombre: que no haya un campo pegable como "la venta".
+    # Se busca el valor, no el nombre: 400.0 no puede aparecer en ningun campo,
+    # ni como `control_sum`, ni como `total`, ni dentro de una cadena del HTML.
+    # Un rotulo ("suma de control") no protege nada el dia que alguien lo pinte.
+    def numeros(node):
+        if isinstance(node, dict):
+            for value in node.values():
+                yield from numeros(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from numeros(value)
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
+            yield float(node)
+
+    assert 400.0 not in set(numeros(m))
+    assert "control_sum" not in m
     assert "total" not in m
     assert "gross" not in m
+    # Lo unico que si cruza marcas es un conteo de renglones: no son pesos.
+    assert m["rows_counted"] == 2
 
 
 def test_una_venta_sin_marca_cae_en_sin_marca_en_vez_de_desaparecer():
@@ -287,3 +304,105 @@ def test_el_json_embebido_no_puede_cerrar_la_etiqueta_script():
                                    brand="</script><img onerror=x>")]))
     assert "</script><img" not in html
     assert "\\u003c/script>" in html or "\\u003c" in html
+
+
+# --------------------------------------------------------------------------
+# 5. El panel de apertura: un conteo escrito a mano que no se puede desfasar
+# --------------------------------------------------------------------------
+
+APERTURA = {
+    "title": "Apertura SJI",
+    "source": {"label": "hoja", "url": "https://drive.google.com/file/d/X/view",
+               "modified_at": "2026-09-27T04:41:54Z",
+               "rows": 4, "delivered": 2, "pending": 2},
+    "blockers": [{"ref": "#27", "title": "Materia prima"},
+                 {"ref": "Anexo J", "title": "Permisos", "off_sheet": True}],
+    "pending_rows": [{"ref": "#27", "title": "Materia prima"},
+                     {"ref": "#9", "title": "Tapete"}],
+}
+
+
+def apertura_file(tmp_path, **cambios):
+    data = json.loads(json.dumps(APERTURA))
+    for key, value in cambios.items():
+        if key == "source":
+            data["source"].update(value)
+        else:
+            data[key] = value
+    path = tmp_path / "apertura.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return str(path)
+
+
+def test_el_panel_de_apertura_calcula_la_antiguedad_del_corte(tmp_path):
+    from datetime import datetime, timezone
+
+    # El panel no puede decir "al dia" porque alguien lo escribio una vez: la
+    # antiguedad sale de la fecha del corte contra el dia de generacion.
+    a = load_apertura(apertura_file(tmp_path),
+                      now=datetime(2026, 10, 4, 18, 0, tzinfo=timezone.utc))
+    assert a["source"]["stale_days"] == 8
+    assert a["source"]["modified_label"] == "26/09/2026"
+
+
+def test_un_corte_que_no_cuadra_con_el_total_de_la_hoja_no_se_dibuja(tmp_path):
+    # 2 + 2 == 4 pasa; 2 + 2 == 9 es un conteo viejo, y un numero viejo arriba
+    # del tablero es peor que no tener el panel.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(tmp_path, source={"rows": 9}))
+    assert "no cuadra" in str(exc.value)
+
+
+def test_no_se_puede_recortar_la_lista_y_dejar_el_numero(tmp_path):
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(tmp_path,
+                                    pending_rows=[{"ref": "#27", "title": "x"}]))
+    assert "1 renglones" in str(exc.value)
+
+
+def test_un_bloqueante_que_ya_no_esta_pendiente_en_la_hoja_truena(tmp_path):
+    # Si la hoja ya marco #27 como entregado y nadie lo saco de los
+    # bloqueantes, el tablero lo diria abierto para siempre.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(tmp_path,
+                                    pending_rows=[{"ref": "#9", "title": "Tapete"},
+                                                  {"ref": "#10", "title": "Toldo"}]))
+    assert "#27" in str(exc.value)
+
+
+def test_el_anexo_del_contrato_no_es_renglon_de_la_hoja_y_eso_se_declara(tmp_path):
+    # `Anexo J` no esta en los pendientes de la hoja y no truena, porque viene
+    # con `off_sheet`. Sin esa bandera tendria que tronar igual que #27.
+    a = load_apertura(apertura_file(tmp_path))
+    assert [b["ref"] for b in a["blockers"]] == ["#27", "Anexo J"]
+
+    roto = json.loads(json.dumps(APERTURA))
+    roto["blockers"][1].pop("off_sheet")
+    path = tmp_path / "roto.json"
+    path.write_text(json.dumps(roto), encoding="utf-8")
+    with pytest.raises(DashboardError):
+        load_apertura(str(path))
+
+
+def test_sin_archivo_de_apertura_la_tarjeta_no_existe_en_vez_de_salir_vacia():
+    # Una tarjeta en blanco se lee como "ya no falta nada".
+    m = model([sale("2026-10-03", 200.0)])
+    assert m["apertura"] is None
+    html = render_html(m)
+    assert 'id="apertura-card" hidden' in html
+
+
+def test_el_panel_no_rompe_el_autocontenido_de_la_pagina(tmp_path):
+    from datetime import datetime, timezone
+
+    a = load_apertura(apertura_file(tmp_path),
+                      now=datetime(2026, 10, 4, 18, 0, tzinfo=timezone.utc))
+    m = model([sale("2026-10-03", 200.0)])
+    m = dict(m, apertura=a)
+    html = render_html(m)
+    # La hoja si es un enlace de salida (el panel dice de donde sale el numero),
+    # pero la pagina sigue sin *traer* nada: ningun recurso se descarga.
+    assert "drive.google.com" in html
+    for remote in ("src=", "@import", "fetch(", "XMLHttpRequest", "@font-face",
+                   "//cdn"):
+        assert remote not in html, f"el tablero dejo de ser autocontenido: {remote}"

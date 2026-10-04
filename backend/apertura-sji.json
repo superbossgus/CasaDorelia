@@ -1,0 +1,83 @@
+{
+  "_comentario": [
+    "Panel de apertura de Casa Dorelia SJI (Plateros 162) para dashboard.py.",
+    "Nada de esto se inventa: los renglones y el estatus salen de la hoja de",
+    "seguimiento de Drive (ver source.id) y las tareas del tablero BOS. Cuando la",
+    "hoja se mueva, se actualiza este archivo: source.modified_at, los conteos y",
+    "los renglones que cambien de estatus. load_apertura valida que los conteos",
+    "cuadren con el total de la hoja, asi que un archivo a medias no se dibuja:",
+    "truena con el renglon que no cuadra."
+  ],
+  "title": "Apertura SJI: lo que todavia falta",
+  "hint": "No es venta. Es la lista de pendientes de apertura de Casa Dorelia SJI (Plateros 162), tomada de la hoja de seguimiento y del tablero. Esta aqui porque este tablero es lo que se abre a diario: el conteo deja de depender de que alguien abra una tarjeta.",
+  "source": {
+    "label": "Hoja «Casa_Dorelia_Seguimiento_Apertura» (Drive)",
+    "id": "1qQMKv43Ibk78IZBkDymLOlAOGRoUVL0v",
+    "url": "https://drive.google.com/file/d/1qQMKv43Ibk78IZBkDymLOlAOGRoUVL0v/view",
+    "modified_at": "2026-09-27T04:41:54Z",
+    "rows": 38,
+    "delivered": 20,
+    "pending": 18
+  },
+  "pending_title": "El resto de los renglones «Pendiente» de la hoja",
+  "pending_hint": "Mismo corte. No son bloqueantes de apertura, pero siguen abiertos y nadie los esta contando en otro lado.",
+  "blockers": [
+    {
+      "ref": "#27",
+      "title": "Alimentos salados - Materia prima",
+      "group": "Produccion",
+      "priority": "Alta",
+      "status": "Pendiente en la hoja",
+      "note": "pizza, croissant, baguette, grilled cheese: lista de insumos",
+      "issue": "BOS-41"
+    },
+    {
+      "ref": "#22",
+      "title": "Refrigerador: productos",
+      "group": "Produccion",
+      "priority": "Alta",
+      "status": "Pendiente en la hoja",
+      "note": "refrescos, agua, leches: definir par stock",
+      "issue": "BOS-42"
+    },
+    {
+      "ref": "#28",
+      "title": "Alimentos salados - Manual de operacion",
+      "group": "Produccion",
+      "priority": "Alta",
+      "status": "Pendiente en la hoja",
+      "note": "recetas, tiempos, temperaturas, armado",
+      "issue": "BOS-7"
+    },
+    {
+      "ref": "Anexo J",
+      "title": "Permisos, uso de suelo, aviso sanitario y proteccion civil",
+      "group": "Anexos del contrato",
+      "priority": "Alta",
+      "status": "sin check en la hoja de anexos",
+      "note": "indispensable para reducir riesgo de clausura",
+      "issue": "BOS-6",
+      "off_sheet": true
+    }
+  ],
+  "pending_rows": [
+    { "ref": "#7", "title": "Bote de basura: separar organico e inorganico", "group": "Espacio fisico", "priority": "Media" },
+    { "ref": "#9", "title": "Tapete «Casa Dorelia»", "group": "Espacio fisico", "priority": "Media" },
+    { "ref": "#10", "title": "Limpieza de toldo (sopladora)", "group": "Espacio fisico", "priority": "Media" },
+    { "ref": "#12", "title": "Maceta", "group": "Espacio fisico", "priority": "Baja" },
+    { "ref": "#14", "title": "Desechables con logo", "group": "Marketing", "priority": "Alta" },
+    { "ref": "#15", "title": "Pantallas con menu, fotos y videos de los alimentos", "group": "Marketing", "priority": "Alta" },
+    { "ref": "#16", "title": "Presentacion del pan en vitrinas (charolas)", "group": "Marketing", "priority": "Alta" },
+    { "ref": "#17", "title": "Fotos del local en redes", "group": "Marketing", "priority": "Alta" },
+    { "ref": "#18", "title": "Redes sociales: historias y analisis de mercado", "group": "Marketing", "priority": "Media" },
+    { "ref": "#19", "title": "Promociones en la zona", "group": "Marketing", "priority": "Media" },
+    { "ref": "#22", "title": "Refrigerador: productos", "group": "Produccion", "priority": "Alta" },
+    { "ref": "#23", "title": "Pan - Materia prima", "group": "Produccion", "priority": "Alta" },
+    { "ref": "#25", "title": "Cafe - Materia prima", "group": "Produccion", "priority": "Alta" },
+    { "ref": "#27", "title": "Alimentos salados - Materia prima", "group": "Produccion", "priority": "Alta" },
+    { "ref": "#28", "title": "Alimentos salados - Manual de operacion", "group": "Produccion", "priority": "Alta" },
+    { "ref": "#30", "title": "Helados - Materia prima", "group": "Produccion", "priority": "Media" },
+    { "ref": "#31", "title": "Helados - Manual de operacion", "group": "Produccion", "priority": "Media" },
+    { "ref": "#34", "title": "Correos dorelia: validar accesos", "group": "Marketing", "priority": "Media" }
+  ]
+}

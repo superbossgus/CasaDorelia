@@ -19,8 +19,10 @@ en un comentario:
 
 1. **No publica un total consolidado.** `casa_dorelia` guarda dos marcas con dos
    repartos distintos (ver `brands.py`): Casa Dorelia (`c-sji`) y Le Pain Dore
-   (`c-tecno`). Cada una tiene su renglon, su color y su tarjeta. La suma de las
-   dos solo aparece rotulada como suma de control.
+   (`c-tecno`). Cada una tiene su renglon, su color y su tarjeta. La suma de
+   dinero de las dos no existe **ni en el modelo**: un campo que vive en el JSON
+   acaba dibujado por el siguiente que toque la plantilla. Lo unico que cruza
+   marcas es el conteo de renglones cargados, que no son pesos.
 2. **No llama "venta" al cobro con tarjeta.** La API de Clip no entrega
    efectivo, asi que todo monto de aqui es **piso**. El rotulo va en el
    encabezado y en cada tarjeta, no en una nota al pie.
@@ -47,10 +49,22 @@ El eje es el **dia de operacion** (`business_date`, UTC-6), nunca el dia UTC: ve
   segundo dia.
 - **cerrado**: su cifra es citable como bruto del dia (piso, siempre piso).
 
+### El panel de apertura
+
+Arriba de la venta puede ir un panel con lo que *falta* para abrir: los
+bloqueantes abiertos y los renglones pendientes de la hoja de seguimiento. No
+sale de `sales` porque no es venta: viaja en un JSON aparte (`--apertura`) y es
+opcional. Esta ahi porque el tablero es la superficie que se abre a diario, y un
+conteo que vive aqui deja de depender de que alguien abra una tarjeta.
+`load_apertura` lo valida antes de dibujarlo (los conteos tienen que cuadrar con
+el total de la hoja) y calcula la antiguedad del corte, para que el panel no
+pueda decir "al dia" porque alguien escribio eso una vez.
+
 ### Correrlo
 
     python backend/dashboard.py --db casa_dorelia
     python backend/dashboard.py --db casa_dorelia --out C:/tmp/ventas.html
+    python backend/dashboard.py --db casa_dorelia --apertura backend/apertura-sji.json
 
 Solo lee: no escribe una sola linea en Mongo. Necesita `python` del sistema y
 `pymongo`; el resto es biblioteca estandar.
@@ -187,15 +201,98 @@ def day_states(*, axis: Sequence[str], last_capture: Mapping[str, int],
     return states
 
 
+def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Panel de pendientes operativos, desde un JSON aparte y con controles.
+
+    No sale de Mongo porque no es venta: sale de la hoja de seguimiento y del
+    tablero de tareas. Viaja en su propio archivo para que el modulo siga sin
+    conocer a ninguna empresa en particular, y para que el dia que la hoja se
+    mueva se edite un JSON de 40 renglones, no la plantilla.
+
+    Tres controles, porque un panel escrito a mano es justo el que se desfasa:
+
+    1. `entregados + pendientes == renglones`. Un conteo que no cuadra con el
+       total de la hoja esta viejo, y un numero viejo arriba del tablero es peor
+       que no tenerlo.
+    2. Si viene la lista de pendientes, tiene que tener tantos renglones como
+       dice el conteo. Asi no se puede recortar la lista y dejar el numero.
+    3. Cada bloqueante tiene que estar en la lista de pendientes (por `ref`), o
+       traer `fuera_de_hoja: true` dicho explicitamente (el caso de los anexos
+       del contrato, que no son renglones de la hoja).
+
+    La antiguedad del corte se *calcula* contra el dia de generacion: el panel
+    no puede decir "al dia" porque alguien escribio eso una vez.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError as exc:
+        raise DashboardError(f"no existe el archivo de apertura: {path}") from exc
+    except ValueError as exc:
+        raise DashboardError(f"el archivo de apertura no es JSON valido: {exc}") from exc
+
+    for key in ("title", "source", "blockers"):
+        if key not in data:
+            raise DashboardError(f"el archivo de apertura no trae `{key}`")
+
+    source = dict(data["source"])
+    for key in ("label", "modified_at", "rows", "delivered", "pending"):
+        if key not in source:
+            raise DashboardError(f"el archivo de apertura no trae `source.{key}`")
+
+    if source["delivered"] + source["pending"] != source["rows"]:
+        raise DashboardError(
+            f"el corte de la hoja no cuadra: {source['delivered']} entregados + "
+            f"{source['pending']} pendientes != {source['rows']} renglones")
+
+    pending_rows = list(data.get("pending_rows") or [])
+    if pending_rows and len(pending_rows) != source["pending"]:
+        raise DashboardError(
+            f"la lista de pendientes trae {len(pending_rows)} renglones pero el "
+            f"corte dice {source['pending']}")
+
+    blockers = [dict(b) for b in data["blockers"]]
+    if not blockers:
+        raise DashboardError("el archivo de apertura no trae un solo bloqueante")
+    if pending_rows:
+        refs = {str(row.get("ref")) for row in pending_rows}
+        for blocker in blockers:
+            if not blocker.get("off_sheet") and str(blocker.get("ref")) not in refs:
+                raise DashboardError(
+                    f"el bloqueante {blocker.get('ref')} no esta entre los "
+                    "pendientes de la hoja (ni se declara `off_sheet`)")
+
+    now = now or datetime.now(timezone.utc)
+    cut = _local_datetime(source["modified_at"])
+    if cut is None:
+        raise DashboardError(f"`source.modified_at` no es una fecha: {source['modified_at']}")
+    source["modified_label"] = cut.strftime("%d/%m/%Y")
+    source["stale_days"] = (now.astimezone(business_day.BUSINESS_TZ).date() - cut.date()).days
+
+    return {
+        "title": data["title"],
+        "hint": data.get("hint"),
+        "source": source,
+        "blockers": blockers,
+        "pending_rows": pending_rows,
+        "pending_title": data.get("pending_title"),
+        "pending_hint": data.get("pending_hint"),
+    }
+
+
 def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 today: Optional[str] = None, now: Optional[datetime] = None,
-                db_name: Optional[str] = None) -> Dict[str, Any]:
+                db_name: Optional[str] = None,
+                apertura: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Arma el modelo completo del tablero. Pura: recibe documentos, no una conexion.
 
     Devuelve ya listo lo que la pagina dibuja, incluida la lista de limites del
     dato. Que los limites se *calculen* (y no se escriban a mano en el HTML) es
     lo que impide que el tablero siga diciendo "sin utilidad" el dia que si haya
     costos, o que se calle el efectivo el dia que entre venta de caja.
+
+    `apertura` es el panel de pendientes operativos (ver `load_apertura`). No
+    sale de `sales` porque no es venta: viaja en su propio archivo y es opcional.
     """
     rows = list(sales)
     now = now or datetime.now(timezone.utc)
@@ -368,10 +465,11 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         "brands": brand_models,
         "rows": len(rows),
         "rows_counted": counted,
-        "control_sum": {
-            "gross": _round2(sum(b["totals"]["gross"] for b in brand_models)),
-            "tickets": sum(b["totals"]["tickets"] for b in brand_models),
-        },
+        # No hay `control_sum`: ni en el modelo. Una suma de dinero entre marcas
+        # no se puede publicar, y un campo que existe en el JSON acaba dibujado
+        # por el siguiente que toque la plantilla. Lo unico que cruza marcas es
+        # `rows_counted`, que es un conteo de renglones, no pesos.
+        "apertura": dict(apertura) if apertura else None,
         "quality": {"checks": checks},
         "limits": {
             # Calculados, no escritos a mano: el dia que el dato cambie, el
@@ -449,16 +547,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="archivo HTML a escribir (default: ./dashboard-ventas.html)")
     parser.add_argument("--title", default="Ventas con tarjeta",
                         help="titulo del tablero")
+    parser.add_argument("--apertura", default=None, metavar="ARCHIVO.json",
+                        help="panel de pendientes de apertura (ver load_apertura); "
+                             "si se omite, el tablero sale solo con la venta")
     parser.add_argument("--json", action="store_true",
                         help="imprime el modelo en JSON en vez de escribir el HTML")
 
     args = parser.parse_args(argv)
 
     try:
+        apertura = load_apertura(args.apertura) if args.apertura else None
         sales = open_sales_collection(args.mongo_url, args.db)
         db_name = args.db or os.environ.get("DB_NAME")
         model = build_model(sales.find({}, {"_id": 0}), title=args.title,
-                            db_name=db_name)
+                            db_name=db_name, apertura=apertura)
     except DashboardError as exc:
         print(f"ERROR: {exc}")
         return 1
@@ -638,6 +740,29 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .check .txt b { color: var(--text-primary); font-weight: 600; }
   .check .fix { display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 
+  /* Panel de apertura: no es venta, es la lista de lo que falta. Va arriba
+     porque es lo que deja de depender de que alguien abra una tarjeta. */
+  .open-head { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: baseline;
+    margin-bottom: 14px; }
+  .open-num { font-size: 26px; font-weight: 650; color: var(--text-primary);
+    font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .open-num.warn { color: var(--warning); }
+  .open-lab { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .open-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .open-list li { display: flex; gap: 9px; align-items: flex-start; font-size: 13px;
+    color: var(--text-secondary); }
+  .open-list .ref { flex: none; font-variant-numeric: tabular-nums; font-weight: 650;
+    color: var(--text-primary); min-width: 54px; }
+  .open-list .blk .ref { color: var(--critical); }
+  .open-list .what b { color: var(--text-primary); font-weight: 600; }
+  .open-list .meta { display: block; color: var(--text-muted); font-size: 12px;
+    margin-top: 1px; }
+  .open-rest { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); }
+  .open-rest h3 { font-size: 13px; font-weight: 600; margin: 0 0 3px;
+    color: var(--text-primary); }
+  .open-rest .hint { margin-bottom: 10px; }
+  .open-head a { font-size: 13px; color: var(--text-primary); }
+
   ul.limits { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary);
     line-height: 1.65; }
   ul.limits b { color: var(--text-primary); font-weight: 600; }
@@ -673,6 +798,18 @@ _TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <section class="tiles" id="tiles" aria-label="Resumen por marca"></section>
+
+  <section class="card" id="apertura-card" hidden>
+    <h2 id="apertura-title"></h2>
+    <p class="hint" id="apertura-hint"></p>
+    <div class="open-head" id="apertura-head"></div>
+    <ul class="open-list" id="apertura-blockers"></ul>
+    <div class="open-rest" id="apertura-rest" hidden>
+      <h3 id="apertura-rest-title"></h3>
+      <p class="hint" id="apertura-rest-hint"></p>
+      <ul class="open-list" id="apertura-pending"></ul>
+    </div>
+  </section>
 
   <section class="card">
     <h2>Cobro con tarjeta por dia</h2>
@@ -1311,6 +1448,83 @@ _TEMPLATE = r"""<!DOCTYPE html>
     host.appendChild(table);
   }
 
+  // Panel de apertura. Se dibuja una vez (no depende de los filtros de venta)
+  // y si el modelo no lo trae, la tarjeta se queda oculta en vez de aparecer
+  // vacia: un panel en blanco se lee como "ya no falta nada".
+  function renderApertura() {
+    var A = M.apertura;
+    if (!A) { return; }
+    var card = document.getElementById("apertura-card");
+    card.hidden = false;
+    document.getElementById("apertura-title").textContent = A.title;
+    document.getElementById("apertura-hint").textContent = A.hint || "";
+
+    function stat(host, value, label, warn) {
+      var box = el("div");
+      box.appendChild(el("div", "open-num" + (warn ? " warn" : ""), value));
+      box.appendChild(el("div", "open-lab", label));
+      host.appendChild(box);
+    }
+    var head = document.getElementById("apertura-head");
+    head.textContent = "";
+    stat(head, NUM.format(A.blockers.length), "bloqueantes de apertura abiertos",
+      A.blockers.length > 0);
+    stat(head, NUM.format(A.source.pending) + " de " + NUM.format(A.source.rows),
+      "renglones «Pendiente» en la hoja de seguimiento", false);
+    var dias = A.source.stale_days;
+    stat(head, dias === 0 ? "hoy" : NUM.format(dias) + (dias === 1 ? " dia" : " dias"),
+      "sin movimiento en la hoja (corte " + A.source.modified_label + ")", dias >= 3);
+
+    // Fuente clickeable cuando la hay: el panel dice de donde sale el numero,
+    // no pide que alguien se acuerde.
+    if (A.source.url) {
+      var box = el("div");
+      var a = el("a", null, "abrir la hoja");
+      a.href = A.source.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      box.appendChild(a);
+      box.appendChild(el("div", "open-lab", A.source.label));
+      head.appendChild(box);
+    }
+
+    function row(item, isBlocker) {
+      var li = el("li", isBlocker ? "blk" : null);
+      li.appendChild(el("span", "ref", item.ref));
+      var what = el("span", "what");
+      what.appendChild(el("b", null, item.title));
+      var bits = [];
+      if (item.group) { bits.push(item.group); }
+      if (item.priority) { bits.push("prioridad " + item.priority); }
+      if (item.status) { bits.push(item.status); }
+      if (item.note) { bits.push(item.note); }
+      if (item.issue) { bits.push("tarea " + item.issue); }
+      if (bits.length) { what.appendChild(el("span", "meta", bits.join(" · "))); }
+      li.appendChild(what);
+      return li;
+    }
+
+    var blockers = document.getElementById("apertura-blockers");
+    blockers.textContent = "";
+    A.blockers.forEach(function (b) { blockers.appendChild(row(b, true)); });
+
+    var rest = document.getElementById("apertura-rest");
+    var others = (A.pending_rows || []).filter(function (p) {
+      return !A.blockers.some(function (b) { return String(b.ref) === String(p.ref); });
+    });
+    if (!others.length) { rest.hidden = true; return; }
+    rest.hidden = false;
+    // El conteo va en el rotulo, calculado: una lista recortada no puede
+    // quedarse con un numero viejo escrito en el JSON.
+    document.getElementById("apertura-rest-title").textContent =
+      (A.pending_title || "El resto de los pendientes") +
+      " (" + NUM.format(others.length) + ")";
+    document.getElementById("apertura-rest-hint").textContent = A.pending_hint || "";
+    var list = document.getElementById("apertura-pending");
+    list.textContent = "";
+    others.forEach(function (p) { list.appendChild(row(p, false)); });
+  }
+
   function renderChecks() {
     var host = document.getElementById("checks");
     host.textContent = "";
@@ -1354,11 +1568,14 @@ _TEMPLATE = r"""<!DOCTYPE html>
         "Los cobros de Clip entran con un solo renglon («Venta Clip, sin desglose»), " +
         "asi que no hay producto mas vendido. Eso solo sale del punto de venta."]);
     }
-    items.push(["No hay un total de las dos marcas. ",
-      "Esta base guarda dos negocios con repartos distintos. La suma de control " +
-      "del historico es " + MXN.format(M.control_sum.gross) + " en " +
-      NUM.format(M.control_sum.tickets) + " cobros, y es solo eso: una suma de " +
-      "control, no «la venta» de ninguna de las dos."]);
+    items.push(["No hay un total de las dos marcas, y no lo va a haber. ",
+      "Esta base guarda " + NUM.format(M.brands.length) + " negocios con repartos " +
+      "y dueños distintos (" + M.brands.map(function (b) {
+        return b.name + " / " + b.vehicle;
+      }).join("; ") + "). Sumarlos da una cifra que no se le puede publicar a " +
+      "nadie, porque no es la venta de ninguno de los dos. Cada marca tiene su " +
+      "tarjeta, su linea y su renglon en la tabla; el unico numero que cruza las " +
+      "dos es el conteo de " + NUM.format(M.rows_counted) + " renglones cargados."]);
     items.push(["El dia de hoy nunca esta completo. ",
       "La carga corre a las " + M.config.morning_catchup_local + " y a las " +
       M.config.snapshot_local + " CDMX. A la primera las sucursales no han abierto, " +
@@ -1465,6 +1682,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
   // ---------------------------------------------------------------- arranque
   renderHeader();
+  renderApertura();
   renderChecks();
   renderLimits();
   renderAll();

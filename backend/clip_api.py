@@ -29,9 +29,28 @@ Decisiones que cambian el dinero reportado (y por que):
 2. **El monto de Clip ya trae IVA.** Aqui no se desglosa: eso lo hace
    `sales_import.normalize_row` con `split_tax`. Este modulo no vuelve a sumar
    impuesto nunca.
-3. **La API no trae efectivo.** Solo ve lo que paso por la terminal. El faltante
-   de efectivo lo declara `sales_import.CASH_COVERAGE["clip_api"]`; no se
-   simula aqui.
+3. **No todo lo que no es debito/credito es tarjeta.** Clip mete en
+   `payment_method: "OTHER"` dos cosas distintas y las distingue por el emisor
+   de la tarjeta (ver `_payment_method`):
+
+   - **vales de despensa/restaurante** (`card.issuer` = PLUXEE MEXICO, EDENRED,
+     TOKA, TODITO...), que son dinero cobrado pero con otro reparto y otra
+     comision que una tarjeta bancaria; y
+   - **cobros sin tarjeta** (`card.brand: "XX"`, `last4: "0000"`, sin emisor),
+     que no se pueden nombrar desde la API.
+
+   Hasta BOS-119 los tres caian en `"tarjeta"` por el `return` final. En
+   Tecnoparque eso son $25,214 de vales de un año reportados como tarjeta.
+
+4. **El efectivo de la app no viaja por esta API.** Medido el 2026-10-04 con las
+   credenciales de las dos sucursales: 1,912 cobros en 360 dias, **cero**
+   rotulados efectivo y solo 2 sin tarjeta identificable. La app de Clip si
+   registra cobros en efectivo (`Ventas > Efectivo`), pero esa coleccion vive
+   detras de `/cash`, que el gateway contesta pidiendo firma AWS y no acepta la
+   llave de comercio. Con lo que entrega la API, el total sigue siendo **piso**;
+   la cobertura la declara `sales_import.CASH_COVERAGE["clip_api"]` y el
+   faltante **no se simula aqui**. El camino que si trae efectivo es el export
+   del panel (`clip_import.py`), que tiene columna de metodo de pago.
 
 Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
@@ -446,18 +465,68 @@ def _gross_amount(payment: Mapping[str, Any]) -> float:
     )
 
 
+def _card_info(payment: Mapping[str, Any]) -> Dict[str, Optional[str]]:
+    """`card` como tres cadenas limpias, exista o no el objeto."""
+    card = payment.get("card") if isinstance(payment.get("card"), Mapping) else {}
+    brand = (_text(card.get("brand")) or "").upper() or None
+    return {
+        "brand": brand,
+        "issuer": _text(card.get("issuer")),
+        "last4": _text(card.get("last4")),
+    }
+
+
+def _has_card_identity(info: Mapping[str, Optional[str]]) -> bool:
+    """?Hay una tarjeta real detras de este cobro?
+
+    Clip rellena los tres campos aunque no haya plastico: una marca `XX` con
+    `last4` `0000` y sin emisor es el relleno, no una tarjeta.
+    """
+    if info.get("issuer"):
+        return True
+    brand = info.get("brand")
+    if brand and brand != "XX":
+        return True
+    return info.get("last4") not in (None, "", "0000")
+
+
 def _payment_method(payment: Mapping[str, Any]) -> str:
-    """Vocabulario de `SaleBase.payment_method` a partir de lo que trae la API."""
-    card = payment.get("card")
-    brand = card.get("brand") if isinstance(card, Mapping) else None
-    for candidate in (payment.get("payment_method"), brand, payment.get("sub_type")):
+    """Vocabulario de `SaleBase.payment_method` a partir de lo que trae la API.
+
+    -> `"tarjeta"` | `"vales"` | `"otro"` | `"efectivo"` | `"transferencia"`.
+
+    El orden importa y es el de la confianza en la fuente:
+
+    1. Si Clip **lo dice con palabras** (`payment_method`/`sub_type` que se
+       normaliza a efectivo o transferencia), se le cree. Hoy no manda ninguno
+       de los dos, y esta rama es justamente la que hace que el dia que empiece
+       a mandar efectivo entre rotulado solo, sin tocar codigo.
+    2. `DEBIT`/`CREDIT` es tarjeta bancaria.
+    3. `OTHER` **con emisor** es vale (Pluxee, Edenred, Toka, Todito...). No es
+       tarjeta: el reparto y la comision son otros, y mezclarlo en "tarjeta"
+       esconde ~12% del dinero de Tecnoparque.
+    4. `OTHER` **sin tarjeta identificable** es `"otro"`, no efectivo. Decirle
+       efectivo seria inventar: la API no lo nombra y es lo que esta en consulta
+       en BOS-119. `"otro"` se ve en el tablero y se puede confirmar; "tarjeta"
+       se hubiera quedado escondido para siempre.
+    """
+    for candidate in (payment.get("payment_method"), payment.get("sub_type")):
         if not candidate:
             continue
         method = normalize_payment_method(candidate)
-        if method in ("tarjeta", "efectivo", "transferencia"):
+        if method in ("efectivo", "transferencia"):
             return method
-    # Todo lo que cobra la terminal es tarjeta; el efectivo no llega por API.
-    return "tarjeta"
+
+    raw = (_text(payment.get("payment_method")) or "").upper()
+    if raw in ("DEBIT", "CREDIT"):
+        return "tarjeta"
+
+    info = _card_info(payment)
+    if raw == "OTHER" and info["issuer"]:
+        return "vales"
+    if _has_card_identity(info):
+        return "tarjeta"
+    return "otro"
 
 
 def map_payment(payment: Mapping[str, Any], *, branch: str, index: int = 0) -> Dict[str, Any]:
@@ -480,11 +549,15 @@ def map_payment(payment: Mapping[str, Any], *, branch: str, index: int = 0) -> D
             + (f" (receipt_no {receipt_no})" if receipt_no else "")
         )
 
-    card = payment.get("card") if isinstance(payment.get("card"), Mapping) else {}
+    info = _card_info(payment)
+    # El emisor entra a `notes` desde BOS-119: es lo unico que dice *que* vale
+    # fue (Pluxee, Edenred...), y sin el un renglon de vales es indistinguible
+    # de una tarjeta bancaria una vez cargado.
     notes_bits = [bit for bit in (
         _text(payment.get("sub_type")),
-        _text(card.get("brand")),
-        f"****{_text(card.get('last4'))}" if _text(card.get("last4")) else None,
+        info["brand"],
+        info["issuer"],
+        f"****{info['last4']}" if info["last4"] else None,
     ) if bit]
 
     return {

@@ -243,6 +243,47 @@ def test_solo_tarjeta_marca_el_total_como_piso():
     assert mixed["limits"]["cash_excluded"] is False
 
 
+def test_un_metodo_nuevo_no_hace_pasar_el_total_por_venta_completa():
+    """Falta el efectivo mientras no haya un renglon de efectivo.
+
+    Antes de BOS-119 esto se preguntaba al reves ("el unico metodo es tarjeta"),
+    asi que al separar los vales de la tarjeta el tablero dejaba de decir que el
+    total es un piso — sin que nadie escribiera ese cambio. El dinero seguia
+    igual de incompleto.
+    """
+    m = model([sale("2026-10-03", 200.0),
+               sale("2026-10-03", 115.0, payment_method="vales"),
+               sale("2026-10-03", 108.0, payment_method="otro")])
+    assert m["limits"]["cash_excluded"] is True
+    assert m["limits"]["payment_methods"] == {"tarjeta": 1, "vales": 1, "otro": 1}
+
+
+def test_los_pesos_por_metodo_viven_en_la_marca_y_no_cruzados():
+    """El desglose por metodo es por marca: un monto global sumaria las dos."""
+    m = model([sale("2026-10-03", 200.0, brand="casa-dorelia"),
+               sale("2026-10-03", 115.0, brand="casa-dorelia", payment_method="vales"),
+               sale("2026-10-03", 300.0, brand="le-pain-dore")])
+
+    por_marca = {b["brand"]: b["by_method"] for b in m["brands"]}
+    assert por_marca["casa-dorelia"]["tarjeta"] == {"gross": 200.0, "tickets": 1}
+    assert por_marca["casa-dorelia"]["vales"] == {"gross": 115.0, "tickets": 1}
+    assert por_marca["le-pain-dore"]["tarjeta"] == {"gross": 300.0, "tickets": 1}
+    # 500.0 (las dos tarjetas juntas) no existe en ninguna parte del modelo.
+    assert "gross_by_payment_method" not in m["limits"]
+    assert 500.0 not in {v for v in _numeros(m)}
+
+
+def _numeros(node):
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _numeros(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _numeros(value)
+    elif isinstance(node, (int, float)) and not isinstance(node, bool):
+        yield float(node)
+
+
 def test_comision_y_costo_solo_se_reclaman_a_los_renglones_de_clip():
     # Una venta del punto de venta si puede traer costo de verdad; reclamarselo
     # dejaria el control en rojo para siempre y nadie volveria a mirarlo.

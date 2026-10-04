@@ -20,8 +20,10 @@ que los dos caminos no pueden divergir en como calculan IVA, fecha o dedup.
 Dos cosas que este script NO hace, a proposito:
   - No mueve inventario. La venta ya salio por el POS de Clip; descontarla otra
     vez la contaria doble (defecto #3 del analisis de BOS-71).
-  - No trae efectivo. La API de Clip solo entrega cobros con tarjeta, asi que el
-    total cargado siempre es menor a la venta real de la sucursal.
+  - No trae efectivo. La API de Clip entrega lo que cobro la terminal (tarjeta y
+    vales); el efectivo que la app de Clip registra aparte no viaja por ahi
+    (medido en BOS-119), asi que el total cargado siempre es menor a la venta
+    real de la sucursal.
 """
 from __future__ import annotations
 

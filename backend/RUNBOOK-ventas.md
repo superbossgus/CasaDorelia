@@ -362,10 +362,69 @@ proteccion depende de la segunda consulta de `plan_against_db`. Hay una prueba
 que fija ese supuesto; si alguien quita la segunda consulta por "redundante", la
 prueba truena en lugar de duplicar ventas en silencio.
 
+## Donde esta el efectivo (medido, no supuesto)
+
+Gustavo lo dijo en BOS-119: los cobros en efectivo **si** se registran en Clip y
+se ven en la app. La pregunta era si viajan por la API. Medido el **2026-10-04**
+con las credenciales de las dos sucursales, pidiendo 360 dias mes por mes:
+
+| | cobros | pesos |
+|---|---|---|
+| tarjeta bancaria (`DEBIT`/`CREDIT`) | 1,679 | $182,231.11 |
+| vales (`OTHER` con emisor: Pluxee, Edenred, Toka, Todito, Scotiabank) | 231 | $25,259.10 |
+| sin tarjeta identificable (`OTHER`, marca `XX`, `last4` `0000`) | 2 | $113.00 |
+| **rotulados efectivo** | **0** | **$0.00** |
+
+(Montos de consumo, sin propina. Una ventana de 30 dias
+—`2026-02-14..2026-03-15`— la API la contesto con `400 payclip.bad.request`, asi
+que ese mes no esta contado: no cambia el cero del efectivo, pero el total de
+pesos es piso tambien aqui.)
+
+Dos cosas salen de ahi:
+
+1. **El efectivo de la app no viaja por `/payments`.** Dos renglones sin tarjeta
+   en un año no son una caja; y los dos traen `status` vacio y un
+   `merchant_invoice`, que es otra forma de cobro. Esta pendiente de confirmar
+   con Gustavo si esos dos son efectivo (interaccion de BOS-119); mientras tanto
+   entran como `payment_method: "otro"`, **no** como efectivo.
+2. **La coleccion de efectivo existe, pero no para esta llave.** `GET /cash`
+   (y `/cash/payments`, `/cash/register`) contestan `403` con
+   *"Authorization header requires 'Credential' parameter"* — el gateway pide
+   firma AWS, que es como entra la app, no la llave de comercio. Una ruta que no
+   existe contesta `403 Forbidden` pelado (`/pos`, `/money-in`), asi que la
+   diferencia dice que la ruta esta ahi y que nos falta el esquema de auth, no
+   que el dato no exista. Levantar eso no es configuracion: es otro producto.
+
+**El camino que si trae efectivo** es el export del panel
+(`dashboard.clip.mx > Ventas > Descargar`), que tiene columna de metodo de pago:
+`clip_import.py` ya la lee y `normalize_payment_method` ya mapea "efectivo". Con
+un archivo, la carga de efectivo es un comando.
+
+Mientras no entre un solo renglon de efectivo, todo total de este camino es un
+**piso**. El tablero lo dice y lo *calcula* (`limits.cash_excluded` es
+`"efectivo" not in payment_methods`): el dia que entre efectivo, deja de decirlo
+solo.
+
+### Re-etiquetar lo ya cargado
+
+Las ventas cargadas antes de BOS-119 quedaron todas como `tarjeta`, vales
+incluidos. Para re-etiquetarlas con la misma funcion que usa la carga:
+
+```
+python backend/backfill_payment_method.py --db casa_dorelia --dry-run
+python backend/backfill_payment_method.py --db casa_dorelia --commit
+```
+
+Solo escribe `payment_method` y `notes`, nunca dinero ni llaves, y es
+idempotente (la segunda corrida da `to_update: 0`). Corrido el 2026-10-04:
+9 renglones cambiaron de cajon en Tecnoparque ($958.10 de vales y $108.00 de
+`otro`, antes contados como tarjeta) y 118 reponen el emisor en `notes`.
+
 ## Lo que este camino NO hace
 
-- **No trae efectivo.** La API de Clip solo entrega cobros con tarjeta. El total
-  cargado siempre es menor a la venta real de la sucursal, por diseño.
+- **No trae efectivo.** La API de Clip entrega lo que cobro la terminal (tarjeta
+  y vales); el efectivo de la app no pasa por ahi (medido arriba). El total
+  cargado siempre es menor a la venta real de la sucursal.
 - **No mueve inventario.** La venta ya salio por el POS de Clip; descontarla otra
   vez la contaria doble. Los documentos quedan con `inventory_applied: false`.
 - **No vuelve a sumar IVA.** El monto de Clip ya viene con IVA incluido; el

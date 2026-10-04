@@ -370,6 +370,12 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
     cost_known = 0
     itemized = 0
     payment_methods: Dict[str, int] = defaultdict(int)
+    # Pesos por metodo, **dentro de cada marca**: un vale de $230 y una tarjeta
+    # de $75 pesan igual en el conteo y no en el dinero, y lo que se lee es el
+    # dinero. Por marca y no global porque un monto global cruzaria las dos
+    # marcas, que es justo lo que este tablero no publica (lo cuida una prueba).
+    per_method: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(lambda: defaultdict(
+        lambda: {"gross": 0.0, "tickets": 0}))
     sources: Dict[str, int] = defaultdict(int)
     undated = 0
 
@@ -387,7 +393,8 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
 
         source = sale.get("source") or "sin-origen"
         sources[source] += 1
-        payment_methods[sale.get("payment_method") or "sin-metodo"] += 1
+        method = sale.get("payment_method") or "sin-metodo"
+        payment_methods[method] += 1
 
         # Estos dos controles solo tienen sentido sobre renglones de Clip: una
         # venta del punto de venta si puede traer costo y comision de verdad.
@@ -403,6 +410,9 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
             itemized += 1
 
         total = float(sale.get("total") or 0.0)
+        method_bucket = per_method[slug][method]
+        method_bucket["gross"] += total
+        method_bucket["tickets"] += 1
         bucket = per_day[slug][day]
         bucket["gross"] += total
         bucket["tickets"] += 1
@@ -488,6 +498,13 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 "tickets": total_tickets,
                 "avg_ticket": _round2(total_gross / total_tickets) if total_tickets else None,
             },
+            # Con que se cobro, en pesos de ESTA marca. Es lo que separa un vale
+            # de una tarjeta y lo que deja ver, el dia que entre, el efectivo.
+            "by_method": {
+                method: {"gross": _round2(per_method[slug][method]["gross"]),
+                         "tickets": int(per_method[slug][method]["tickets"])}
+                for method in sorted(per_method[slug])
+            },
         })
 
     checks = [
@@ -531,7 +548,14 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         "limits": {
             # Calculados, no escritos a mano: el dia que el dato cambie, el
             # rotulo cambia con el.
-            "cash_excluded": sorted(payment_methods) == ["tarjeta"],
+            # Falta el efectivo mientras no haya **un solo** renglon de
+            # efectivo. Antes esto se preguntaba al reves ("el unico metodo es
+            # tarjeta"), y eso convertia cualquier metodo nuevo — vales, por
+            # ejemplo — en un "ya entra el efectivo" que nadie escribio.
+            "cash_excluded": "efectivo" not in payment_methods,
+            # Conteo de renglones, no pesos: un total en dinero aqui cruzaria
+            # las dos marcas. Los pesos por metodo viven en cada marca
+            # (`brands[].by_method`).
             "payment_methods": dict(sorted(payment_methods.items())),
             "sources": dict(sorted(sources.items())),
             "margin_unknown": cost_known == 0,
@@ -603,7 +627,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--mongo-url", default=None, help="default: $MONGO_URL o localhost")
     parser.add_argument("--out", default="dashboard-ventas.html",
                         help="archivo HTML a escribir (default: ./dashboard-ventas.html)")
-    parser.add_argument("--title", default="Ventas con tarjeta",
+    parser.add_argument("--title", default="Cobro en terminal Clip",
                         help="titulo del tablero")
     parser.add_argument("--apertura", default=None, metavar="ARCHIVO.json",
                         help="panel de pendientes de apertura (ver load_apertura); "
@@ -648,7 +672,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     for brand in model["brands"]:
         print(f"  {brand['name']}: ${brand['totals']['gross']:,.2f}"
               f" en {brand['totals']['tickets']} cobros")
-    print("  Piso, no venta del dia: el efectivo no pasa por la API de Clip.")
+        for method, mix in brand["by_method"].items():
+            print(f"    {method}: ${mix['gross']:,.2f} en {mix['tickets']} cobros")
+    if model["limits"]["cash_excluded"]:
+        print("  Piso, no venta del dia: el efectivo de la app de Clip no viaja "
+              "por esta API.")
 
     failed = [c for c in model["quality"]["checks"] if c["count"]]
     for check in failed:
@@ -1649,14 +1677,34 @@ _TEMPLATE = r"""<!DOCTYPE html>
     host.textContent = "";
     var L = M.limits;
     var items = [];
+    // El desglose se arma del dato y **por marca**, porque un monto por metodo
+    // sumando las dos marcas seria el total que este tablero no publica:
+    // "Casa Dorelia: tarjeta $3,954.00 (36)". Si manana entra un metodo nuevo
+    // aparece solo, sin que nadie edite este texto.
+    var mix = M.brands.map(function (b) {
+      var parts = Object.keys(b.by_method || {}).map(function (k) {
+        return k + " " + money(b.by_method[k].gross) +
+          " (" + NUM.format(b.by_method[k].tickets) + ")";
+      }).join(", ");
+      return b.name + ": " + (parts || "sin cobros");
+    }).join(" · ");
     if (L.cash_excluded) {
       items.push(["No dice la venta del dia. ",
-        "Todo lo cargado es cobro con tarjeta via la API de Clip, que no entrega " +
-        "efectivo. Cada monto es un piso: la venta real es ese numero mas la caja."]);
+        "Lo cargado es lo que cobro la terminal de Clip: " + mix + ". El efectivo " +
+        "que la app de Clip registra aparte NO viaja por esta API, asi que cada " +
+        "monto es un piso: la venta real es ese numero mas la caja."]);
     } else {
-      items.push(["Metodos de pago cargados. ",
-        Object.keys(L.payment_methods).join(", ") +
-        ". Revisa si el efectivo ya entra completo antes de leer un total como venta."]);
+      items.push(["Ya entra efectivo en el total. ",
+        mix + ". Deja de ser un piso solo si el efectivo del dia entro completo; " +
+        "un efectivo a medias es peor que ninguno, porque se lee como venta."]);
+    }
+    if (L.payment_methods["otro"]) {
+      items.push(["Hay cobros sin metodo identificado. ",
+        NUM.format(L.payment_methods["otro"]) + " cobro(s) llegaron de Clip sin " +
+        "tarjeta y sin rotulo («OTHER» con marca «XX» y sin emisor), y su monto " +
+        "esta en el desglose de su marca. Podrian ser efectivo registrado en la " +
+        "app: hay que confirmarlo ahi, no adivinarlo. Van contados, pero no se " +
+        "les llama tarjeta."]);
     }
     if (L.margin_unknown) {
       items.push(["No dice utilidad ni margen. ",
@@ -1733,9 +1781,15 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
     var note = document.getElementById("floor-note");
     note.textContent = "";
-    note.appendChild(el("strong", null, "Todo lo de aqui es cobro con tarjeta, no la venta del dia. "));
+    note.appendChild(el("strong", null,
+      M.limits.cash_excluded
+        ? "Todo lo de aqui lo cobro la terminal de Clip, no es la venta del dia. "
+        : "Esto ya incluye efectivo: leelo con el desglose por metodo. "));
     note.appendChild(el("span", null,
-      "El efectivo no pasa por la API de Clip, asi que cada cifra es un piso. " +
+      (M.limits.cash_excluded
+        ? "Tarjeta y vales si; el efectivo que la app de Clip registra aparte no " +
+          "viaja por esta API, asi que cada cifra es un piso. "
+        : "") +
       "Y esta base guarda dos marcas con repartos distintos: se leen por renglon, " +
       "nunca sumadas."));
 

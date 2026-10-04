@@ -321,8 +321,62 @@ def test_metodo_de_pago_usa_el_vocabulario_del_app():
     assert map_payment(payment(), branch="sji")["payment_method"] == "tarjeta"
     raw = payment(payment_method=None, sub_type=None, card={"brand": "MASTERCARD"})
     assert map_payment(raw, branch="sji")["payment_method"] == "tarjeta"
+
+
+def test_debito_y_credito_son_tarjeta():
+    for raw_method in ("DEBIT", "CREDIT"):
+        row = map_payment(payment(payment_method=raw_method), branch="sji")
+        assert row["payment_method"] == "tarjeta"
+
+
+# `OTHER` es la bolsa donde Clip mete todo lo que no es debito ni credito, y
+# adentro hay cosas distintas. Antes de BOS-119 las tres caian en "tarjeta".
+
+def test_vale_con_emisor_no_se_cuenta_como_tarjeta():
+    """Pluxee/Edenred cobran de verdad, pero no son tarjeta bancaria.
+
+    Es dinero con otro reparto y otra comision. En Tecnoparque son ~12% de los
+    pesos de un año, y reportados como tarjeta nadie los puede separar.
+    """
+    raw = payment(payment_method="OTHER", sub_type="EMV_SIGNATURE",
+                  card={"brand": "CR", "issuer": "PLUXEE MEXICO", "last4": "3702"})
+    assert map_payment(raw, branch="tecnoparque")["payment_method"] == "vales"
+
+
+def test_el_emisor_del_vale_queda_en_las_notas():
+    """Sin el emisor, un vale cargado es indistinguible de una tarjeta."""
+    raw = payment(payment_method="OTHER", sub_type="EMV_SIGNATURE",
+                  card={"brand": "CR", "issuer": "EDENRED", "last4": "2791"})
+    notes = map_payment(raw, branch="tecnoparque")["notes"]
+    assert "EDENRED" in notes and "****2791" in notes
+
+
+def test_cobro_sin_tarjeta_es_otro_y_no_se_le_llama_efectivo():
+    """`XX`/`0000` sin emisor: la API no lo nombra, asi que no se adivina.
+
+    Decirle "efectivo" inventaria un dato que esta en consulta (BOS-119), y
+    decirle "tarjeta" lo esconderia para siempre. `otro` se ve en el tablero.
+    """
+    raw = payment(payment_method="OTHER", sub_type="CONSUMER",
+                  card={"brand": "XX", "issuer": None, "last4": "0000"})
+    assert map_payment(raw, branch="tecnoparque")["payment_method"] == "otro"
+
+
+def test_sin_metodo_ni_tarjeta_tampoco_es_tarjeta():
     raw = payment(payment_method=None, sub_type=None, card={})
-    assert map_payment(raw, branch="sji")["payment_method"] == "tarjeta"
+    assert map_payment(raw, branch="sji")["payment_method"] == "otro"
+
+
+def test_si_clip_dice_efectivo_se_le_cree():
+    """La rama que hace que el efectivo entre solo el dia que Clip lo mande.
+
+    Hoy la API no manda ninguno (medido: 1,912 cobros en 360 dias, cero), pero
+    si lo manda no hay que tocar codigo para que quede rotulado.
+    """
+    raw = payment(payment_method="CASH", sub_type=None, card={})
+    assert map_payment(raw, branch="sji")["payment_method"] == "efectivo"
+    raw = payment(payment_method="OTHER", sub_type="EFECTIVO", card={})
+    assert map_payment(raw, branch="sji")["payment_method"] == "efectivo"
 
 
 def test_el_id_de_clip_es_la_llave_de_dedup():

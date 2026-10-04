@@ -55,8 +55,11 @@ CASH_COVERAGE = {
     SOURCE_CLIP_API: {
         "includes_cash": False,
         "note": (
-            "La API de Clip solo entrega cobros con tarjeta. El efectivo NO esta "
-            "incluido en este total y se sigue capturando a mano."
+            "La API de Clip entrega lo que cobro la terminal: tarjeta bancaria y "
+            "vales (Pluxee, Edenred...). El efectivo que la app de Clip si "
+            "registra NO viaja por esta API (medido el 2026-10-04: 1,912 cobros "
+            "en 360 dias, cero rotulados efectivo), asi que este total es un "
+            "piso. Para traer efectivo hay que usar el export del panel."
         ),
     },
     SOURCE_CLIP_EXPORT: {
@@ -296,7 +299,12 @@ class ImportPlan:
             )
         days = sorted({d["business_date"] for d in self.documents})
         coverage = dict(CASH_COVERAGE[self.source])
-        if self.source == SOURCE_CLIP_EXPORT:
+        if self.source in IMPORT_SOURCES:
+            # Se *mide* sobre lo cargado, no se declara por origen. La API de
+            # Clip hoy no manda efectivo, pero si algun dia lo manda (o si la
+            # terminal lo empieza a rotular), el resumen tiene que dejar de
+            # decir que falta: un "no incluye efectivo" escrito a mano se vuelve
+            # mentira sin que nadie lo note.
             coverage["includes_cash"] = "efectivo" in by_method
         return {
             "source": self.source,

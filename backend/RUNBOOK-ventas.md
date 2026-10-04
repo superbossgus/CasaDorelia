@@ -382,11 +382,17 @@ pesos es piso tambien aqui.)
 
 Dos cosas salen de ahi:
 
-1. **El efectivo de la app no viaja por `/payments`.** Dos renglones sin tarjeta
-   en un año no son una caja; y los dos traen `status` vacio y un
-   `merchant_invoice`, que es otra forma de cobro. Esta pendiente de confirmar
-   con Gustavo si esos dos son efectivo (interaccion de BOS-119); mientras tanto
-   entran como `payment_method: "otro"`, **no** como efectivo.
+1. **El efectivo de la app no viaja por la API de pagos.** Confirmado por
+   Gustavo el mismo dia: el **30/08 hubo 5 cobros en efectivo en SJI**, y ese
+   dia la API entrega **2** renglones (un cobro con tarjeta de $5.00 y una
+   cancelacion de $5.00). Ninguno es efectivo. Y el volumen que falta no es
+   anecdotico: reporta **6 a 20 cobros en efectivo al dia por sucursal**.
+
+   De paso cayo el misterio de los dos renglones sin tarjeta: **eran
+   cancelaciones**. `?status=cancelled` devuelve exactamente los renglones cuyo
+   `status` llega vacio, y el de $108.00 del 21/09 Gustavo lo reconocio como
+   "cancelacion de pago con tarjeta". Estaban cargados como venta porque
+   `classify_status("")` dice `"paid"`; ver abajo.
 2. **La coleccion de efectivo existe, pero no para esta llave.** `GET /cash`
    (y `/cash/payments`, `/cash/register`) contestan `403` con
    *"Authorization header requires 'Credential' parameter"* — el gateway pide
@@ -395,10 +401,48 @@ Dos cosas salen de ahi:
    diferencia dice que la ruta esta ahi y que nos falta el esquema de auth, no
    que el dato no exista. Levantar eso no es configuracion: es otro producto.
 
-**El camino que si trae efectivo** es el export del panel
-(`dashboard.clip.mx > Ventas > Descargar`), que tiene columna de metodo de pago:
-`clip_import.py` ya la lee y `normalize_payment_method` ya mapea "efectivo". Con
-un archivo, la carga de efectivo es un comando.
+### Una cancelacion no es una venta (y estuvo cargada como una)
+
+La API manda `status: ""` en un cobro cancelado. `classify_status("")` devuelve
+`"paid"` — correcto para el export del panel, donde una columna de estado
+ausente si significa cobrada, y exactamente al reves para la API. Resultado: la
+cancelacion de $108.00 del 21/09 entro como venta de Le Pain Dore.
+
+Arreglado en `clip_api._status` (vacio = `reversed`, y `plan_import` salta todo
+lo que no este `paid`). Para sacar las que ya entraron:
+
+```
+python backend/purge_cancelled.py --db casa_dorelia          # en seco
+python backend/purge_cancelled.py --db casa_dorelia --commit
+```
+
+Pide a Clip las canceladas con su propio filtro (`?status=cancelled`) y borra
+solo los folios que Clip declara cancelados, imprimiendo cada renglon antes.
+Corrido el 2026-10-04: 1 renglon fuera ($108.00), `sales` de 118 a 117, y Le
+Pain Dore de $8,931.15 a $8,823.15. Es el unico script de esta cadena que
+borra, porque un cobro cancelado no es una venta mal etiquetada: no es venta.
+
+### Como traer el efectivo, en orden de preferencia de Gustavo
+
+El camino listo es el **export del panel** (`dashboard.clip.mx > Ventas >
+Descargar`), que tiene columna de metodo de pago: `clip_import.py` ya la lee y
+`normalize_payment_method` ya mapea "efectivo". Con un archivo, cargar el
+efectivo es un comando.
+
+Pero Gustavo pidio (BOS-119, 04/10) **no** empezar por pedirle archivos: que se
+siga buscando por API/app. Los tres caminos que quedan, de menos a mas costo:
+
+1. **Credencial del panel como secreto de Paperclip.** El panel es una
+   aplicacion web con su propia API, y ahi si vive el efectivo. Requiere que
+   Gustavo cargue usuario/contrasena (o la sesion) como secreto — **jamas en un
+   comentario ni en el codigo** — y aprobacion explicita, porque toca
+   credenciales de pagos.
+2. **Pedirle a Clip el alcance.** La llave de comercio cubre pagos de terminal.
+   Que la cuenta pueda leer el efectivo por API es una pregunta para soporte /
+   el panel de desarrolladores, no un parametro que falte.
+3. **Captura del corte de caja en la app propia.** Una pantalla de cierre por
+   turno, que ademas sirve para cuadrar contra la caja fisica. Es el unico
+   camino que no depende de Clip, y el mas trabajo.
 
 Mientras no entre un solo renglon de efectivo, todo total de este camino es un
 **piso**. El tablero lo dice y lo *calcula* (`limits.cash_excluded` es

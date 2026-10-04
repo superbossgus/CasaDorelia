@@ -42,15 +42,24 @@ Decisiones que cambian el dinero reportado (y por que):
    Hasta BOS-119 los tres caian en `"tarjeta"` por el `return` final. En
    Tecnoparque eso son $25,214 de vales de un año reportados como tarjeta.
 
-4. **El efectivo de la app no viaja por esta API.** Medido el 2026-10-04 con las
-   credenciales de las dos sucursales: 1,912 cobros en 360 dias, **cero**
-   rotulados efectivo y solo 2 sin tarjeta identificable. La app de Clip si
-   registra cobros en efectivo (`Ventas > Efectivo`), pero esa coleccion vive
-   detras de `/cash`, que el gateway contesta pidiendo firma AWS y no acepta la
-   llave de comercio. Con lo que entrega la API, el total sigue siendo **piso**;
-   la cobertura la declara `sales_import.CASH_COVERAGE["clip_api"]` y el
-   faltante **no se simula aqui**. El camino que si trae efectivo es el export
-   del panel (`clip_import.py`), que tiene columna de metodo de pago.
+4. **Un `status` vacio es una cancelacion.** No es "no se sabe": la API siempre
+   manda el campo y `?status=cancelled` devuelve justo esos renglones (ver
+   `_status`). `classify_status("")` dice `"paid"` porque en el export del panel
+   una columna ausente si significa cobrada; aqui significa lo contrario, y sin
+   la rama una cancelacion entra como venta.
+
+5. **El efectivo de la app no viaja por esta API.** Confirmado dos veces el
+   2026-10-04. Medido: 1,912 cobros en 360 dias con las credenciales de las dos
+   sucursales, **cero** rotulados efectivo. Y contra la realidad: Gustavo
+   reporta 6 a 20 cobros en efectivo por dia por sucursal, y el 30/08 hubo 5 en
+   SJI — ese dia la API entrega **2** renglones (un cobro con tarjeta y una
+   cancelacion), ninguno de ellos efectivo. La app si los registra
+   (`Ventas > Efectivo`), pero esa coleccion vive detras de una ruta que el
+   gateway contesta pidiendo firma AWS y no acepta la llave de comercio.
+
+   Consecuencia que hay que decir siempre: el total de este camino es un
+   **piso**, y el faltante **no es chico**. La cobertura la declara
+   `sales_import.CASH_COVERAGE["clip_api"]`; aqui no se simula.
 
 Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
@@ -465,6 +474,26 @@ def _gross_amount(payment: Mapping[str, Any]) -> float:
     )
 
 
+def _status(payment: Mapping[str, Any]) -> str:
+    """Estado del cobro. **`status` vacio significa cancelada**, no cobrada.
+
+    Verificado contra la API el 2026-10-04: `?status=cancelled` devuelve
+    exactamente los renglones cuyo `status` llega como cadena vacia, y
+    `?status=paid` los omite. La API siempre manda el campo, asi que vacio no es
+    "no se sabe": es el estado.
+
+    Esta rama existe porque `classify_status("")` devuelve `"paid"`, y con razon:
+    en el export del panel una columna de estado ausente si significa cobrada.
+    En la API significa lo contrario. Sin esto, una cancelacion entra como venta
+    — paso con el cobro cancelado de $108 del 21/09 en Tecnoparque, que estuvo
+    cargado como venta hasta BOS-119.
+    """
+    raw = payment.get("status")
+    if raw is None or not str(raw).strip():
+        return "reversed"
+    return classify_status(raw)
+
+
 def _card_info(payment: Mapping[str, Any]) -> Dict[str, Optional[str]]:
     """`card` como tres cadenas limpias, exista o no el objeto."""
     card = payment.get("card") if isinstance(payment.get("card"), Mapping) else {}
@@ -563,7 +592,7 @@ def map_payment(payment: Mapping[str, Any], *, branch: str, index: int = 0) -> D
     return {
         "occurred_at": occurred_at,
         "gross_amount": _gross_amount(payment),
-        "status": classify_status(payment.get("status")),
+        "status": _status(payment),
         "payment_method": _payment_method(payment),
         "transaction_id": transaction_id,
         "receipt_no": receipt_no,

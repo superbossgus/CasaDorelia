@@ -317,6 +317,28 @@ def test_cancelada_queda_marcada_como_reversed():
     assert map_payment(payment(status="cancelled"), branch="sji")["status"] == "reversed"
 
 
+def test_status_vacio_es_una_cancelacion_no_una_venta():
+    """Lo que la API manda vacio, `?status=cancelled` lo devuelve.
+
+    Verificado contra la API el 2026-10-04 y confirmado por Gustavo: el cobro de
+    $108 del 21/09 en Tecnoparque, que llegaba con `status: ""`, era una
+    cancelacion de pago con tarjeta — y estuvo cargado como venta.
+    """
+    for vacio in ("", "   ", None):
+        row = map_payment(payment(status=vacio), branch="sji")
+        assert row["status"] == "reversed", vacio
+
+
+def test_una_cancelacion_no_entra_al_plan_de_carga():
+    """La defensa de verdad: `plan_import` salta lo que no esta cobrado."""
+    rows = [map_payment(payment(id="txn_ok"), branch="sji"),
+            map_payment(payment(id="txn_cancelada", status=""), branch="sji")]
+    plan = plan_import(rows, cafeteria_id="c-sji", source=SOURCE_CLIP_API)
+
+    assert [d["dedup_key"] for d in plan.documents] == ["clip:txn_ok"]
+    assert plan.summary()["skipped_reasons"] == {"no_cobrada:reversed": 1}
+
+
 def test_metodo_de_pago_usa_el_vocabulario_del_app():
     assert map_payment(payment(), branch="sji")["payment_method"] == "tarjeta"
     raw = payment(payment_method=None, sub_type=None, card={"brand": "MASTERCARD"})

@@ -1689,10 +1689,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
       return b.name + ": " + (parts || "sin cobros");
     }).join(" · ");
     if (L.cash_excluded) {
-      items.push(["No dice la venta del dia. ",
+      items.push(["No dice la venta del dia, y el faltante no es chico. ",
         "Lo cargado es lo que cobro la terminal de Clip: " + mix + ". El efectivo " +
-        "que la app de Clip registra aparte NO viaja por esta API, asi que cada " +
-        "monto es un piso: la venta real es ese numero mas la caja."]);
+        "que la app de Clip registra aparte NO viaja por esta API: son entre 6 y 20 " +
+        "cobros al dia por sucursal que no estan aqui (confirmado con Gustavo el " +
+        "04/10). Cada monto es un piso, y la venta real es ese numero mas la caja."]);
     } else {
       items.push(["Ya entra efectivo en el total. ",
         mix + ". Deja de ser un piso solo si el efectivo del dia entro completo; " +
@@ -1702,9 +1703,9 @@ _TEMPLATE = r"""<!DOCTYPE html>
       items.push(["Hay cobros sin metodo identificado. ",
         NUM.format(L.payment_methods["otro"]) + " cobro(s) llegaron de Clip sin " +
         "tarjeta y sin rotulo («OTHER» con marca «XX» y sin emisor), y su monto " +
-        "esta en el desglose de su marca. Podrian ser efectivo registrado en la " +
-        "app: hay que confirmarlo ahi, no adivinarlo. Van contados, pero no se " +
-        "les llama tarjeta."]);
+        "esta en el desglose de su marca. No se les llama tarjeta ni efectivo: " +
+        "hay que mirarlos en la app de Clip antes de leerlos como venta. El unico " +
+        "que habia resulto ser una cancelacion, y las cancelaciones ya no entran."]);
     }
     if (L.margin_unknown) {
       items.push(["No dice utilidad ni margen. ",

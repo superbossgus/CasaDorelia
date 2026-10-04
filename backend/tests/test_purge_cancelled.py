@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from clip_api import map_payment  # noqa: E402
+from clip_api import ClipApiError, map_payment  # noqa: E402
 from purge_cancelled import plan_purge, purge_all, purge_branch  # noqa: E402
 
 
@@ -109,6 +109,51 @@ def test_sin_canceladas_en_clip_no_borra_nada(monkeypatch):
                            commit=True, fetch=_fetch([]))
 
     assert summary["cancelled_in_db"] == 0 and sales.deletes == []
+
+
+def test_una_ventana_que_la_api_rechaza_se_parte_en_vez_de_tumbar_la_sucursal(monkeypatch):
+    """Con 13 meses cargados, una ventana de 30 dias cae en el tramo roto (BOS-145).
+
+    Antes la consulta entera fallaba y Tecnoparque dejaba de poder purgarse.
+    """
+    monkeypatch.setenv("CLIP_API_KEY_TECNOPARQUE", "k" * 8)
+    monkeypatch.setenv("CLIP_SECRET_KEY_TECNOPARQUE", "s" * 8)
+    sales = FakeSales([stored("PKV", day="2025-10-21"), stored("PBp", total=164.0, day="2026-10-04")])
+
+    def fetch(credentials, start, end, **kwargs):
+        assert kwargs.get("status") == "cancelled", kwargs
+        if (end.date() - start.date()).days > 40:
+            raise ClipApiError("payclip.bad.request", status=400)
+        return [api_row("PKV")]
+
+    summary = purge_branch(sales, branch="tecnoparque", cafeteria_id="c-tecno",
+                           commit=True, fetch=fetch)
+
+    assert summary["unchecked"] == []
+    assert summary["deleted"] == 1
+
+
+def test_un_dia_que_la_api_nunca_entrega_queda_rotulado_y_marca_la_purga_incompleta(monkeypatch):
+    """Un dia sin leer no es un dia sin cancelaciones: `ok` tiene que caerse."""
+    monkeypatch.setenv("CLIP_API_KEY_TECNOPARQUE", "k" * 8)
+    monkeypatch.setenv("CLIP_SECRET_KEY_TECNOPARQUE", "s" * 8)
+    for name in ("CLIP_API_KEY_SJI", "CLIP_SECRET_KEY_SJI",
+                 "CLIP_API_KEY", "CLIP_SECRET_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    sales = FakeSales([stored("PKV", day="2026-02-20"), stored("PBp", total=164.0, day="2026-02-21")])
+
+    def fetch(credentials, start, end, **kwargs):
+        raise ClipApiError("payclip.bad.request", status=400)
+
+    summary = purge_all(sales,
+                        branches=[{"id": "c-tecno", "clip_branch": "tecnoparque"}],
+                        commit=True, fetch=fetch)
+
+    assert summary["ok"] is False
+    assert summary["unchecked_days_total"] == 2
+    assert summary["unchecked"][0]["branch"] == "tecnoparque"
+    # Y no borro nada apoyandose en una lectura que no ocurrio.
+    assert summary["deleted_total"] == 0 and sales.deletes == []
 
 
 def test_una_credencial_muerta_no_detiene_a_la_otra_sucursal(monkeypatch):

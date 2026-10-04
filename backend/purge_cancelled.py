@@ -19,6 +19,19 @@ autoridad sobre si un cobro se cobro.
 Un renglon de la base que la API ya no entrega **no se toca**: la ausencia no es
 una cancelacion.
 
+## Los dias que no se pudieron revisar se reportan, no se asumen limpios
+
+El rango que pregunta es de la primera a la ultima venta cargada. Al cargar el
+año de historia (BOS-145) ese rango paso de 13 dias a 13 meses, y una de sus
+ventanas de 30 dias cae dentro de `2026-02-14..2026-03-15`, que la API contesta
+`400 payclip.bad.request`: la consulta completa de Tecnoparque empezo a fallar
+y el script dejo de poder purgar la marca que trae el 98% del dinero.
+
+Ahora la ventana se bisecta (`clip_backfill.fetch_rows_splitting`) y los dias
+que sigan fallando salen en `unchecked`. La distincion importa mas aqui que en
+el cargador: este script **borra**, y un dia que no se pudo leer no es un dia
+sin cancelaciones. Por eso `ok` exige tambien que no haya dias sin revisar.
+
 ## Borra, y por eso imprime lo que borra
 
 Es el unico script de esta cadena que elimina documentos, porque un cobro
@@ -37,14 +50,14 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from branches_init import GROUP_BRANCHES
-from business_day import BUSINESS_TZ
 from clip_api import ClipApiError, fetch_rows, load_credentials
+from clip_backfill import fetch_rows_splitting
 from clip_load import ClipLoadError, open_sales_collection
 from sales_import import SOURCE_CLIP_API
 
@@ -71,7 +84,8 @@ def purge_branch(sales: Any, *, branch: str, cafeteria_id: str,
     ))
     if not stored:
         return {"branch": branch, "cafeteria_id": cafeteria_id, "stored": 0,
-                "cancelled_in_db": 0, "deleted": 0, "rows": [], "commit": commit}
+                "cancelled_in_db": 0, "deleted": 0, "rows": [], "unchecked": [],
+                "commit": commit}
 
     days = sorted({s["business_date"] for s in stored if s.get("business_date")})
     if not days:
@@ -80,12 +94,17 @@ def purge_branch(sales: Any, *, branch: str, cafeteria_id: str,
             "python backend/backfill_business_date.py"
         )
 
-    start = datetime.fromisoformat(days[0]).replace(tzinfo=BUSINESS_TZ)
-    end = datetime.fromisoformat(days[-1]).replace(tzinfo=BUSINESS_TZ) + timedelta(days=1)
-
     credentials = load_credentials(branch)
-    # `status="cancelled"` lo decide Clip, no este script.
-    cancelled = fetch(credentials, start, end, status="cancelled")
+    # `status="cancelled"` lo decide Clip, no este script. Y la ventana se
+    # bisecta: sobre 13 meses hay tramos que la API rechaza, y sin partirlos la
+    # consulta entera falla (ver el encabezado).
+    cancelled, unchecked = fetch_rows_splitting(
+        credentials,
+        date.fromisoformat(days[0]),
+        date.fromisoformat(days[-1]),
+        fetch=fetch,
+        status="cancelled",
+    )
     keys = [f"clip:{row['transaction_id']}" for row in cancelled if row.get("transaction_id")]
 
     rows = plan_purge(stored, keys)
@@ -108,6 +127,9 @@ def purge_branch(sales: Any, *, branch: str, cafeteria_id: str,
         "deleted": deleted,
         "gross_removed": round(sum(float(r.get("total") or 0.0) for r in rows), 2),
         "rows": [{k: v for k, v in row.items() if k != "_id"} for row in rows],
+        # Dias que la API no entrego. No son dias sin cancelaciones: son dias
+        # que esta corrida no pudo revisar.
+        "unchecked": unchecked,
         "commit": commit,
     }
 
@@ -126,11 +148,19 @@ def purge_all(sales: Any, *, branches: Sequence[Mapping[str, Any]] = GROUP_BRANC
         except (ClipApiError, ClipLoadError) as exc:
             failed[branch] = str(exc)
 
+    unchecked = [
+        {**gap, "branch": r["branch"]} for r in results for gap in r.get("unchecked", [])
+    ]
     return {
-        "ok": not failed,
+        # `ok` exige las dos cosas: que ninguna sucursal fallara y que no haya
+        # dias sin revisar. Una purga que no pudo mirar 30 dias no hizo su
+        # trabajo, aunque haya borrado lo que si vio.
+        "ok": not failed and not unchecked,
         "commit": commit,
         "branches": results,
         "failed": failed,
+        "unchecked": unchecked,
+        "unchecked_days_total": sum(gap.get("days", 0) for gap in unchecked),
         "cancelled_in_db_total": sum(r["cancelled_in_db"] for r in results),
         "deleted_total": sum(r["deleted"] for r in results),
     }
@@ -164,6 +194,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if not summary["commit"] and summary["cancelled_in_db_total"]:
         print("\nEn seco: no se borro nada. Repite con --commit para aplicarlo.")
+    if summary["unchecked"]:
+        print(f"\nOJO: {summary['unchecked_days_total']} dia(s) que la API no entrego; "
+              "la purga quedo incompleta ahi. No son dias sin cancelaciones.")
     return 0 if summary["ok"] else 1
 
 

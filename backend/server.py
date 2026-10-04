@@ -36,6 +36,33 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 from app_config import jwt_secret
 
+# Dia de operacion del negocio (UTC-6). Todo reporte de ventas corta por aqui:
+# `created_at` esta en UTC y una venta de las 19:00 de CDMX cae en el dia UTC
+# siguiente, asi que cortar por UTC inventa venta en dias cerrados (BOS-97).
+import backfill_brand
+import backfill_business_date
+import business_day
+import brands
+from app_config import cors_origins, jwt_secret
+from branches_init import brand_for
+from business_day import (
+    business_window,
+    daily_totals,
+    day_start_utc,
+    recent_days,
+    stamp_business_date,
+)
+
+# Carga de ventas de Clip (modulos puros, sin Mongo ni FastAPI dentro).
+from sales_import import (
+    IMPORT_SOURCES,
+    SOURCE_CLIP_EXPORT,
+    SOURCE_MANUAL,
+    SalesImportError,
+    plan_import,
+    reconcile_with_manual,
+)
+
 ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
@@ -56,6 +83,13 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
+
+# CORS
+# Se resuelve aqui, junto al resto de la configuracion, y no 6,500 lineas abajo
+# donde se arma el middleware: asi un `CORS_ORIGINS` invalido se lee como un
+# error de configuracion al arrancar y no como un fallo a mitad del archivo.
+# Mismo trato que `JWT_SECRET`: no hay respaldo (BOS-105).
+CORS_ORIGINS = cors_origins()
 
 # Twilio Config
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
@@ -440,6 +474,18 @@ class SaleResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     created_by: Optional[str] = None
+    # Origen del dato: "manual" (lo capturo una persona), "clip_export" o
+    # "clip_api". Las ventas viejas no traen el campo y por eso el default es
+    # manual: antes de la ingesta, todo se capturaba a mano.
+    source: str = SOURCE_MANUAL
+    # Falso cuando la venta se importo sin costo de producto: la pantalla no
+    # debe presentar utilidad para esas ventas.
+    cost_known: bool = True
+    # Dia de operacion en hora local del negocio (solo en ventas importadas).
+    business_date: Optional[str] = None
+    # Marca dueña del dinero (`brands.py`). Esta base guarda dos marcas del mismo
+    # grupo con socios distintos, asi que la venta dice de cual es (BOS-101).
+    brand: Optional[str] = None
 
 class DashboardStats(BaseModel):
     total_sales_today: float
@@ -804,6 +850,19 @@ def get_tenant_filter(current_user: dict) -> dict:
         return {"tenant_id": tenant_id}
     # For legacy users without tenant, return empty filter (backwards compatibility)
     return {}
+
+def sales_day_window(start_date: Optional[str], end_date: Optional[str]) -> dict:
+    """Ventana de un reporte de ventas, por dia de operacion (UTC-6).
+
+    Reemplaza el filtro viejo sobre `created_at` (UTC). Acepta lo mismo que
+    mandaban las pantallas (`2026-09-30` o un ISO completo) y lo normaliza al
+    dia del negocio; el extremo superior cierra con `$lte` sobre el dia, que ya
+    incluye el dia entero.
+    """
+    try:
+        return business_window(start_date, end_date)
+    except business_day.BusinessDayError as exc:
+        raise HTTPException(status_code=400, detail=f"Rango de fechas invalido: {exc}")
 
 async def check_tenant_limit(tenant_id: str, resource_type: str) -> bool:
     """Check if tenant has reached their limit for a resource"""
@@ -2424,20 +2483,13 @@ async def export_sales_pdf(
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
     # Build query
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
-    
+
     # Create PDF
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
@@ -2559,17 +2611,10 @@ async def export_sales_excel(
     tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
     
@@ -3007,20 +3052,12 @@ async def get_sales(
     current_user: dict = Depends(get_current_user)
 ):
     tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter}
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
         query["cafeteria_id"] = current_user["cafeteria_id"]
-    
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
+
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
@@ -3106,11 +3143,20 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
                     })
     
     profit = subtotal - cost_total
-    
+
+    # La marca dueña del dinero sale de la sucursal, no del usuario: esta base
+    # guarda dos marcas del mismo grupo y sin este campo no se pueden separar
+    # (BOS-101). Se lee aqui porque el nombre de la sucursal ya se necesitaba
+    # para la respuesta; es la misma consulta, no una de mas.
+    cafeteria = await db.cafeterias.find_one(
+        {"id": sale.cafeteria_id}, {"_id": 0, "name": 1, "brand": 1}
+    )
+
     sale_dict = {
         "id": sale_id,
         "cafeteria_id": sale.cafeteria_id,
         "tenant_id": current_user.get("tenant_id"),
+        "brand": (cafeteria or {}).get("brand") or brand_for(sale.cafeteria_id),
         "items": enriched_items,
         "subtotal": round(subtotal, 2),
         "tax": round(tax, 2),
@@ -3121,14 +3167,185 @@ async def create_sale(sale: SaleCreate, current_user: dict = Depends(get_current
         "clip_transaction_id": sale.clip_transaction_id,
         "notes": sale.notes,
         "created_by": current_user["user_id"],
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        # Capturada por una persona en el app. Las ventas que entran por
+        # /sales/import llevan "clip_export" o "clip_api".
+        "source": SOURCE_MANUAL,
+        "cost_known": True,
+        "inventory_applied": True
     }
-    
+    # Dia de operacion (UTC-6): es el campo por el que cortan los reportes. Si
+    # no se sella aqui, una venta capturada a las 19:00 se reportaria el dia
+    # siguiente, igual que pasaba con las importadas.
+    stamp_business_date(sale_dict)
+
     await db.sales.insert_one(sale_dict)
-    
-    cafeteria = await db.cafeterias.find_one({"id": sale.cafeteria_id}, {"_id": 0, "name": 1})
-    
+
     return SaleResponse(**sale_dict, cafeteria_name=cafeteria["name"] if cafeteria else "Desconocida")
+
+
+# ============== CARGA DE VENTAS DE CLIP (BOS-71) ==============
+
+class SaleImportRow(BaseModel):
+    """Una venta de Clip ya normalizada (la produce `clip_import.parse_sales`)."""
+    model_config = ConfigDict(extra="ignore")
+    occurred_at: str                       # ISO-8601; sin offset = hora local (UTC-6)
+    gross_amount: float                    # lo que pago el cliente, IVA INCLUIDO
+    payment_method: Optional[str] = None
+    status: Optional[str] = None
+    dedup_key: Optional[str] = None
+    transaction_id: Optional[str] = None
+    receipt_no: Optional[str] = None
+    branch: Optional[str] = None
+    tip: Optional[float] = None
+    fee: Optional[float] = None
+    product_id: Optional[str] = None
+    product_name: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_cost: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class SalesImportRequest(BaseModel):
+    cafeteria_id: str
+    rows: List[SaleImportRow]
+    source: str = SOURCE_CLIP_EXPORT       # clip_export | clip_api
+    dry_run: bool = True                   # por default NO escribe
+    skip_inventory: bool = True            # ver nota abajo: hoy solo True
+    reconcile: bool = True
+
+
+@api_router.post("/sales/import")
+async def import_sales(
+    payload: SalesImportRequest,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Carga ventas de Clip sin los defectos de `POST /sales`.
+
+    - El monto llega con IVA incluido y aqui se desglosa; nunca se vuelve a sumar.
+    - La fecha es la de la venta (`occurred_at`), no la de la carga.
+    - No mueve inventario: la venta ya salio por el POS de Clip.
+    - Es idempotente por `dedup_key`; reimportar el mismo archivo no duplica.
+    - Con `dry_run` (default) devuelve el resumen y la conciliacion sin escribir.
+    """
+    if payload.source not in IMPORT_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"`source` debe ser uno de {list(IMPORT_SOURCES)}"
+        )
+    if not payload.skip_inventory:
+        # A proposito: una venta cobrada en Clip ya descargo el inventario
+        # fisico. Descontarla otra vez al importarla es el defecto #3 del
+        # analisis de BOS-71. Si hiciera falta, va en una tarea aparte.
+        raise HTTPException(
+            status_code=422,
+            detail=("Las ventas importadas no mueven inventario (`skip_inventory` "
+                    "debe ser true). Para una venta nueva usa POST /api/sales.")
+        )
+
+    tenant_filter = get_tenant_filter(current_user)
+    cafeteria = await db.cafeterias.find_one(
+        {**tenant_filter, "id": payload.cafeteria_id}, {"_id": 0, "name": 1}
+    )
+    if not cafeteria:
+        raise HTTPException(status_code=404, detail="Cafeteria no encontrada")
+    if (current_user["role"] != UserRole.ADMIN
+            and current_user.get("cafeteria_id")
+            and current_user["cafeteria_id"] != payload.cafeteria_id):
+        raise HTTPException(status_code=403, detail="No puedes cargar ventas de otra cafeteria")
+
+    rows = [row.model_dump() for row in payload.rows]
+
+    # Idempotencia: se consultan solo las claves del lote, no la coleccion entera.
+    candidate_keys = [r["dedup_key"] for r in rows if r.get("dedup_key")]
+    existing_keys = set()
+    if candidate_keys:
+        async for doc in db.sales.find(
+            {**tenant_filter, "dedup_key": {"$in": candidate_keys}}, {"_id": 0, "dedup_key": 1}
+        ):
+            existing_keys.add(doc["dedup_key"])
+
+    try:
+        plan = plan_import(
+            rows,
+            cafeteria_id=payload.cafeteria_id,
+            source=payload.source,
+            existing_keys=existing_keys,
+            tenant_id=current_user.get("tenant_id"),
+            created_by=current_user["user_id"],
+        )
+    except SalesImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Segunda pasada de idempotencia: las claves que el modulo derivo solo
+    # (filas sin `dedup_key` explicito) tambien pueden existir ya.
+    derived = [d["dedup_key"] for d in plan.documents if d["dedup_key"] not in existing_keys]
+    if derived:
+        already = set()
+        async for doc in db.sales.find(
+            {**tenant_filter, "dedup_key": {"$in": derived}}, {"_id": 0, "dedup_key": 1}
+        ):
+            already.add(doc["dedup_key"])
+        if already:
+            kept = []
+            for doc in plan.documents:
+                if doc["dedup_key"] in already:
+                    plan.skipped.append({
+                        "row": None,
+                        "business_date": doc["business_date"],
+                        "dedup_key": doc["dedup_key"],
+                        "reason": "ya_importada",
+                        "gross_amount": doc["total"],
+                    })
+                else:
+                    kept.append(doc)
+            plan.documents = kept
+
+    if payload.reconcile and plan.documents:
+        days = sorted({d["business_date"] for d in plan.documents})
+        # Los dos lados hablan ya el mismo idioma (dia de operacion), asi que la
+        # ventana es exacta: ya no hace falta abrirla un dia de cada lado para
+        # compensar el desfase UTC.
+        manual = await db.sales.find(
+            {
+                **tenant_filter,
+                "cafeteria_id": payload.cafeteria_id,
+                **business_window(days[0], days[-1]),
+            },
+            {"_id": 0, "created_at": 1, "total": 1, "payment_method": 1,
+             "source": 1, "business_date": 1},
+        ).to_list(5000)
+        plan.reconciliation = reconcile_with_manual(plan.documents, manual, only_days=days)
+
+    inserted = 0
+    if not payload.dry_run and plan.documents:
+        await db.sales.insert_many(plan.documents)
+        inserted = len(plan.documents)
+
+    return {
+        "dry_run": payload.dry_run,
+        "inserted": inserted,
+        "cafeteria_name": cafeteria.get("name"),
+        "summary": plan.summary(),
+        "reconciliation": plan.reconciliation,
+        "skipped": plan.skipped,
+        "rejected": plan.rejected,
+        # Lo que se insertaria, para que la pantalla lo pueda enseñar antes de escribir.
+        "preview": [
+            {
+                "dedup_key": d["dedup_key"],
+                "created_at": d["created_at"],
+                "business_date": d["business_date"],
+                "total": d["total"],
+                "subtotal": d["subtotal"],
+                "tax": d["tax"],
+                "payment_method": d["payment_method"],
+                "product_name": d["items"][0]["product_name"],
+            }
+            for d in plan.documents[:200]
+        ],
+    }
+
 
 # ============== POS (POINT OF SALE) ROUTES ==============
 
@@ -3185,8 +3402,9 @@ async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(g
         if cafeteria:
             cafeteria_id = cafeteria["id"]
     
-    # Generate order number for the day
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Numero de orden del dia de operacion, no del dia UTC: con el corte en UTC
+    # el consecutivo se reiniciaba a las 18:00 locales, a media jornada.
+    today_start = day_start_utc()
     order_count = await db.pos_orders.count_documents({
         **tenant_filter,
         "created_at": {"$gte": today_start.isoformat()}
@@ -3245,6 +3463,8 @@ async def create_pos_order(order: POSOrderCreate, current_user: dict = Depends(g
         "pos_order_id": order_id,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    # Misma regla que en /sales: el POS tambien sella el dia de operacion.
+    stamp_business_date(sale_dict)
     await db.sales.insert_one(sale_dict)
     
     # Deduct inventory
@@ -3278,8 +3498,9 @@ async def get_pos_orders(
         query["status"] = status
     
     if today_only:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        query["created_at"] = {"$gte": today_start.isoformat()}
+        # "Hoy" es el dia de operacion: los pedidos de la noche siguen siendo
+        # de hoy aunque su `created_at` UTC ya diga mañana.
+        query["created_at"] = {"$gte": day_start_utc().isoformat()}
     
     orders = await db.pos_orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
     return orders
@@ -3384,23 +3605,25 @@ async def cancel_pos_order(
 @api_router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    
+    # Dia y mes de operacion (UTC-6). Con el corte en UTC, "hoy" arrancaba a las
+    # 18:00 del dia anterior y "ventas del mes" abria con dinero del mes pasado.
+    today = business_day.today()
+    month_start = business_day.month_start(today)
+
     query = {**tenant_filter}
     if cafeteria_id:
         query["cafeteria_id"] = cafeteria_id
     elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
         query["cafeteria_id"] = current_user["cafeteria_id"]
-    
+
     all_sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
-    
-    today_str = today.isoformat()
-    month_str = month_start.isoformat()
-    
-    today_sales = [s for s in all_sales if s["created_at"] >= today_str]
-    month_sales = [s for s in all_sales if s["created_at"] >= month_str]
-    
+
+    # El dia se toma del documento (o se deriva de `created_at` si todavia no
+    # paso el backfill), nunca de la hora UTC cruda.
+    dated = [(business_day.sale_business_date(s), s) for s in all_sales]
+    today_sales = [s for day, s in dated if day == today]
+    month_sales = [s for day, s in dated if day and day[:7] == month_start[:7]]
+
     total_sales_today = sum(s["total"] for s in today_sales)
     total_sales_month = sum(s["total"] for s in month_sales)
     total_profit_today = sum(s["profit"] for s in today_sales)
@@ -3442,20 +3665,19 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     
     sales_by_cafeteria = list(cafe_sales.values())
     
-    # Sales trend
-    sales_trend = []
-    for i in range(6, -1, -1):
-        day = today - timedelta(days=i)
-        day_str = day.isoformat()
-        next_day_str = (day + timedelta(days=1)).isoformat()
-        day_sales = [s for s in all_sales if day_str <= s["created_at"] < next_day_str]
-        sales_trend.append({
-            "date": day.strftime("%Y-%m-%d"),
-            "day": day.strftime("%a"),
-            "total": sum(s["total"] for s in day_sales),
-            "profit": sum(s["profit"] for s in day_sales)
-        })
-    
+    # Tendencia: el corte diario por dia de operacion. Es el mismo agrupado que
+    # devuelve `clip_api.summarize_corte`, por eso los dos tienen que cuadrar
+    # peso por peso (ver tests/test_business_day.py).
+    sales_trend = [
+        {
+            "date": row["date"],
+            "day": datetime.fromisoformat(row["date"]).strftime("%a"),
+            "total": row["gross"],
+            "profit": row["profit"],
+        }
+        for row in daily_totals(all_sales, recent_days(7, today))
+    ]
+
     return DashboardStats(
         total_sales_today=round(total_sales_today, 2),
         total_sales_month=round(total_sales_month, 2),
@@ -3472,12 +3694,11 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
 @api_router.get("/reports/sales-comparison")
 async def get_sales_comparison(current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    month_str = month_start.isoformat()
-    
+    # Mes de operacion (UTC-6), no mes UTC: ver `get_dashboard_stats`.
+    month = business_window(start=business_day.month_start())
+
     # Apply tenant filter to both sales and cafeterias queries
-    sales_query = {**tenant_filter, "created_at": {"$gte": month_str}}
+    sales_query = {**tenant_filter, **month}
     sales = await db.sales.find(sales_query, {"_id": 0}).to_list(10000)
     cafeterias = await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)
     
@@ -3495,20 +3716,52 @@ async def get_sales_comparison(current_user: dict = Depends(require_roles([UserR
     
     return comparison
 
+@api_router.get("/reports/sales-by-brand")
+async def get_sales_by_brand(
+    date: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Venta por marca de un dia de operacion (BOS-101).
+
+    Existe porque esta base guarda el dinero de **dos** marcas del mismo grupo
+    (Casa Dorelia y Le Pain Dore) con contratos y socios distintos: el total
+    consolidado mezcla dos repartos y no es publicable como venta de ninguna de
+    las dos. Aqui el total general viene como `gross_all_brands`, con el nombre
+    diciendo lo que es, y cada marca en su renglon con su vehiculo.
+
+    `date` es el dia de operacion (`YYYY-MM-DD`, UTC-6); sin el, es el historico.
+    Una venta sin `brand` cae en el renglon `sin-marca` en vez de desaparecer.
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    pipeline = brands.by_brand_pipeline(business_date=date,
+                                        tenant_id=tenant_filter.get("tenant_id"))
+    rows = await db.sales.aggregate(pipeline).to_list(100)
+
+    result = brands.summarize_brand_rows(rows)
+    result["business_date"] = date or "todo el historico"
+    return result
+
+
 @api_router.get("/reports/profit-analysis")
 async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
     tenant_filter = get_tenant_filter(current_user)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    month_start = today.replace(day=1)
-    month_str = month_start.isoformat()
-    
+    month_start = business_day.month_start()
+
     # Apply tenant filter
-    query = {**tenant_filter, "created_at": {"$gte": month_str}}
+    scope = {**tenant_filter}
     if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    
-    sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
-    purchases = await db.purchases.find(query, {"_id": 0}).to_list(1000)
+        scope["cafeteria_id"] = cafeteria_id
+
+    # Las ventas cortan por dia de operacion. Las compras no guardan
+    # `business_date`, asi que se cortan por el instante UTC en que empieza el
+    # mes de operacion: mismo limite, expresado del modo que entiende la
+    # coleccion.
+    sales = await db.sales.find(
+        {**scope, **business_window(start=month_start)}, {"_id": 0}
+    ).to_list(10000)
+    purchases = await db.purchases.find(
+        {**scope, "created_at": {"$gte": day_start_utc(month_start).isoformat()}}, {"_id": 0}
+    ).to_list(1000)
     
     total_revenue = sum(s["subtotal"] for s in sales)
     total_cost_of_goods = sum(s["cost_total"] for s in sales)
@@ -6348,13 +6601,66 @@ async def get_uploaded_image(filename: str):
 # Include router
 app.include_router(api_router)
 
+# Sin valor de respaldo a proposito, igual que `JWT_SECRET`: `cors_origins()`
+# levanta y la app no arranca si falta `CORS_ORIGINS` o si la lista no sirve. El
+# respaldo anterior era `'*'`, y como la variable no estaba definida en ningun
+# lado ese era el valor que corria. Con `allow_credentials=True` eso no es "API
+# publico": Starlette refleja el `Origin` de quien pregunte, asi que cualquier
+# sitio podia llamar a este API con la sesion del usuario que lo visitara.
+# Razonamiento en `app_config.py` y BOS-105.
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def stamp_pending_business_dates():
+    """Sella el dia de operacion en las ventas que nacieron sin el (BOS-97).
+
+    Los reportes cortan por `business_date`, asi que una venta sin ese campo se
+    caeria de todos ellos. Correrlo al arrancar es lo que hace seguro el cambio
+    de campo sin un paso manual de despliegue; es idempotente, asi que a partir
+    del primer arranque no toca nada y cuesta una consulta que no empata.
+    """
+    try:
+        summary = await backfill_business_date.backfill(db.sales)
+    except Exception:  # pragma: no cover - el API no se cae por el backfill
+        logger.exception("no se pudo sellar `business_date` al arrancar")
+        return
+
+    if summary["stamped"]:
+        logger.info("dia de operacion sellado en %s ventas", summary["stamped"])
+    if summary["undated"]:
+        logger.warning("ventas sin `created_at` legible, quedan fuera de los reportes: %s -> %s",
+                       summary["undated"], summary["undated_ids"])
+
+
+@app.on_event("startup")
+async def stamp_pending_brands():
+    """Sella la marca en las ventas que nacieron sin ella (BOS-101).
+
+    Esta base guarda el dinero de dos marcas del mismo grupo con socios
+    distintos. Una venta sin `brand` se cae del corte por marca, que es justo el
+    reporte que existe para no mezclarlas. Igual que el backfill de
+    `business_date`: idempotente, y correrlo al arrancar es lo que evita un paso
+    manual de despliegue.
+    """
+    try:
+        summary = await backfill_brand.backfill(db.sales, db.cafeterias)
+    except Exception:  # pragma: no cover - el API no se cae por el backfill
+        logger.exception("no se pudo sellar `brand` al arrancar")
+        return
+
+    if summary["stamped"]:
+        logger.info("marca sellada en %s ventas: %s", summary["stamped"], summary["by_brand"])
+    if summary["unmapped"]:
+        logger.warning("ventas de una sucursal sin marca en el catalogo, quedan fuera del "
+                       "corte por marca: %s -> %s",
+                       summary["unmapped"], summary["unmapped_cafeterias"])
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

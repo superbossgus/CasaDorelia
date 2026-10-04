@@ -194,6 +194,48 @@ dos y las quiere ver juntas pero separadas por renglon) y haria que
 `branches_init` no reconociera la sucursal y la duplicara. El razonamiento
 completo esta en `brands.py`.
 
+## Tablero de ventas (un HTML que se abre con doble clic)
+
+```
+python backend/dashboard.py --db casa_dorelia --out C:/tmp/ventas.html
+```
+
+Escribe una pagina **autocontenida**: sin CDN, sin servidor, sin `npm`. Se abre
+sin red y se puede mandar por WhatsApp. Trae, por marca y por dia de operacion,
+el bruto con tarjeta, el numero de cobros y el ticket promedio; mas la hora a la
+que cobran, la tabla completa y los controles del dato. Solo lee: no escribe una
+linea en Mongo.
+
+Lo que **no** puede hacer, por diseño y con pruebas que lo sostienen
+(`backend/tests/test_dashboard.py`):
+
+- publicar un total de las dos marcas como "la venta" — la suma solo existe con
+  el nombre `control_sum`, igual que `gross_all_brands` en `brands.py`;
+- llamar "venta" al cobro con tarjeta — cada cifra va rotulada como piso, porque
+  el efectivo no pasa por la API de Clip;
+- dibujar utilidad cuando no la sabe — las ventas de Clip entran con
+  `cost_known: false`, asi que una grafica de margen daria cero y se leeria como
+  perder todo el margen. El rotulo se **calcula**: el dia que entre venta con
+  costo, deja solo de decirlo;
+- confundir un cero con un hueco — antes del primer dia de una marca la linea se
+  corta, un dia que ya paso sin cobro es un cero, y el dia en curso sin cobro es
+  hueco otra vez (a las 07:45 no hay nada que graficar, y una linea que se
+  desploma a cero se lee como un derrumbe).
+
+El estado de cada dia sale del dato, no de una nota: `cerrado`, `en curso`, o
+`cierre no confirmado` cuando la ultima venta capturada cayo a menos de 30
+minutos de la foto de las 19:45. Esa duda dura **un** dia: el catch-up de las
+07:45 vuelve a pedir el dia completo y lo confirma.
+
+Para cuadrarlo contra el otro camino de codigo (deben dar identico):
+
+```
+python backend/brands.py --db casa_dorelia
+```
+
+Sale con codigo 1 si algun control del dato quedo en rojo, para que un cron se
+entere sin que alguien tenga que leer el HTML.
+
 ## Corte del dia (solo lectura, no escribe)
 
 ```

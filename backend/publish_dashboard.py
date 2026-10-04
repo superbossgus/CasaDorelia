@@ -264,7 +264,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--mongo-url", default=None, help="default: $MONGO_URL o localhost")
     parser.add_argument("--out", default="dashboard-ventas.html",
                         help="archivo HTML intermedio (default: ./dashboard-ventas.html)")
-    parser.add_argument("--title", default="Ventas con tarjeta", help="titulo del tablero")
+    # "Ventas con tarjeta" dejo de ser cierto en BOS-119: lo cargado tambien
+    # trae vales. El default se queda igual que el de `dashboard.py` para que el
+    # enlace publicado y el HTML a mano no se llamen distinto.
+    parser.add_argument("--title", default="Cobro en terminal Clip",
+                        help="titulo del tablero")
     parser.add_argument("--apertura", default=None, metavar="ARCHIVO.json",
                         help="panel de pendientes de apertura; si no cuadra, el "
                              "tablero se publica sin panel y con la razon a la vista")

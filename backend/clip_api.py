@@ -9,6 +9,8 @@ en un log, en un error ni en un repr. Entrega filas con la misma forma que
 Contrato de la API, verificado contra developer.clip.mx (2026-10-01):
 
 - `GET https://api-gw.payclip.com/payments`
+- `GET https://api-gw.payclip.com/settlements[/{id}]` (depositos): documentado,
+  pero **401 para esta cuenta**; ver `probe_deposits`.
 - Autenticacion: `Authorization: Basic base64(API_KEY:SECRET_KEY)`. El panel de
   Clip entrega las dos piezas al crear la credencial y **el secret key solo se
   puede ver una vez**; si se pierde hay que generar otra.
@@ -87,6 +89,7 @@ Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
     python clip_api.py pull --branch sji --from 2026-09-21 --to 2026-10-01
     python clip_api.py census --branch sji --days 360   # ?ya llega efectivo?
+    python clip_api.py deposits --branch sji            # ?y en los depositos?
 """
 from __future__ import annotations
 
@@ -107,6 +110,19 @@ from clip_import import classify_status, normalize_payment_method
 
 API_BASE = "https://api-gw.payclip.com"
 PAYMENTS_PATH = "/payments"
+
+# Encabezados que no son autenticacion pero sin los que no se entra.
+#
+# El gateway de Clip tiene un WAF que bloquea por firma de cliente: sin
+# `User-Agent` propio, urllib se anuncia como `Python-urllib/3.11` y la
+# respuesta es `403 "The site owner has blocked access based on your browser's
+# signature"`. Ese 403 **no** es un problema de credencial ni de alcance, pero
+# se parece a uno; medirlo como tal es como se inventa un hallazgo falso. Por
+# eso los encabezados base viven aqui y los usan todas las rutas.
+BASE_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "casa-dorelia-ingesta/1.0",
+}
 
 # Limites que impone Clip, no nosotros.
 #
@@ -332,11 +348,7 @@ def _request_page(url: str, credentials: ClipCredentials, *,
                   sleep: Callable[[float], None] = time.sleep,
                   backoff: float = 1.0) -> Dict[str, Any]:
     """Una pagina, con reintento en 429/5xx. Traduce el status a un error con nombre."""
-    headers = {
-        "Authorization": credentials.auth_header(),
-        "Accept": "application/json",
-        "User-Agent": "casa-dorelia-ingesta/1.0",
-    }
+    headers = {**BASE_HEADERS, "Authorization": credentials.auth_header()}
 
     attempt = 0
     while True:
@@ -797,6 +809,203 @@ def summarize_census(payments: Iterable[Mapping[str, Any]], *,
 
 
 # --------------------------------------------------------------------------
+# Depositos (la otra superficie que trae `payment_method`)
+# --------------------------------------------------------------------------
+#
+# `/payments` no es el unico endpoint que rotula el metodo de pago: el reporte
+# desglosado de depositos tambien trae `payment_method` por transaccion. El
+# censo nunca lo midio, asi que mientras no se pruebe, "la API no da efectivo"
+# era una afirmacion sobre UNA ruta, no sobre la cuenta.
+#
+# Medido el 2026-10-04 (BOS-151), las dos sucursales, cinco esquemas de
+# autenticacion (Basic, x-api-key, Bearer de cada uno, y los dos juntos):
+#
+#     GET /payments      Basic -> 200   (82 cobros en 20 dias, control positivo)
+#     GET /settlements    todos -> 401  {"message":"Unauthorized"}
+#
+# O sea: la llave de comercio que si lee transacciones **no** tiene alcance de
+# depositos. El 401 no dice "no hay efectivo aqui", dice "no puedes ver". Es una
+# pregunta abierta para Clip, no un hueco medido, y por eso este comando reporta
+# `acceso` aparte de `efectivo_en_depositos`: no se vale contar un 401 como cero.
+
+SETTLEMENTS_PATH = "/settlements"
+
+# Clip solo deja 90 dias de antiguedad en el resumen de depositos.
+MAX_DEPOSIT_AGE = timedelta(days=90)
+
+# Etiquetas que delatarian un cobro en efectivo registrado en la app.
+CASH_LABELS = ("cash", "efectivo", "contado")
+
+
+def build_settlements_url(start: datetime, end: datetime, *,
+                          base_url: str = API_BASE) -> str:
+    """Resumen de depositos. A diferencia de `/payments`, aqui van fechas sin hora."""
+    if end < start:
+        raise ClipApiError(
+            f"rango invertido: `to` ({end.date()}) es anterior a `from` ({start.date()})"
+        )
+    params = [
+        ("from", _as_utc(start).date().isoformat()),
+        ("to", _as_utc(end).date().isoformat()),
+    ]
+    return f"{base_url.rstrip('/')}{SETTLEMENTS_PATH}?{urllib.parse.urlencode(params)}"
+
+
+def deposit_auth_schemes(credentials: ClipCredentials) -> List[Tuple[str, Dict[str, str]]]:
+    """Los encabezados plausibles, en orden.
+
+    La doc de depositos pide `x-api-key` mientras que `/payments` acepta Basic;
+    probar los dos es lo que separa "ruta equivocada" de "esquema equivocado".
+    """
+    return [
+        ("basic", {"Authorization": credentials.auth_header()}),
+        ("x-api-key", {"x-api-key": credentials.api_key}),
+        ("x-api-key+basic", {
+            "x-api-key": credentials.api_key,
+            "Authorization": credentials.auth_header(),
+        }),
+    ]
+
+
+def _deposit_rows(detail: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
+    """Las transacciones de un desglose, sin apostar a un solo nombre de llave.
+
+    Un `details` por dia puede anidar las transacciones del dia; de ahi el
+    segundo nivel.
+    """
+    for key in ("details", "transactions", "payments", "data", "items"):
+        value = detail.get(key)
+        if not isinstance(value, list):
+            continue
+        for row in value:
+            if not isinstance(row, Mapping):
+                continue
+            nested = next(
+                (row[inner] for inner in ("transactions", "payments", "details", "items")
+                 if isinstance(row.get(inner), list)),
+                None,
+            )
+            if nested is None:
+                yield dict(row)
+            else:
+                for sub in nested:
+                    if isinstance(sub, Mapping):
+                        yield dict(sub)
+        return
+    inner_settlement = detail.get("settlement")
+    if isinstance(inner_settlement, Mapping):
+        yield from _deposit_rows(inner_settlement)
+
+
+def probe_deposits(credentials: ClipCredentials, *,
+                   days: int = 90,
+                   transport: Transport = _urllib_transport,
+                   now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Contesta dos cosas distintas: si podemos leer depositos, y si traen efectivo.
+
+    Un 401 **no** se cuenta como "no hay efectivo": se reporta como falta de
+    acceso, con el esquema de autenticacion que se probo. Por eso esta funcion
+    no lanza en 401 — el 401 es justamente el resultado que hay que publicar.
+    """
+    end = _as_utc(now or datetime.now(timezone.utc))
+    start = end - min(timedelta(days=max(1, days)), MAX_DEPOSIT_AGE)
+    url = build_settlements_url(start, end)
+
+    intentos: List[Dict[str, Any]] = []
+    aceptado: Optional[Tuple[str, Dict[str, str], Dict[str, Any]]] = None
+    for scheme, headers in deposit_auth_schemes(credentials):
+        status, body = transport(url, {**BASE_HEADERS, **headers})
+        intentos.append({"auth": scheme, "status": status,
+                         "detail": _error_detail(body).lstrip(": ") or None})
+        if status == 200:
+            try:
+                payload = json.loads(body.decode("utf-8") or "{}")
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise ClipApiError(
+                    f"el resumen de depositos devolvio 200 con un cuerpo que no es JSON: {exc}"
+                ) from exc
+            if isinstance(payload, Mapping):
+                aceptado = (scheme, headers, dict(payload))
+                break
+
+    base = {
+        "branch": credentials.branch,
+        "window": {"from": start.date().isoformat(), "to": end.date().isoformat()},
+        "attempts": intentos,
+    }
+
+    if aceptado is None:
+        return {
+            **base,
+            "acceso": False,
+            "efectivo_en_depositos": None,
+            "note": (
+                "Ningun esquema de autenticacion entro a /settlements. La llave de "
+                "comercio lee /payments pero no depositos, asi que el alcance de "
+                "depositos esta apagado para esta cuenta. `efectivo_en_depositos: "
+                "null` es a proposito: no se puede afirmar que no hay efectivo en un "
+                "reporte que no se pudo leer."
+            ),
+        }
+
+    scheme, headers, payload = aceptado
+    settlements = payload.get("settlements")
+    settlements = settlements if isinstance(settlements, list) else []
+
+    metodos: Dict[str, int] = {}
+    transacciones = 0
+    leidos = 0
+    fallidos: List[Dict[str, Any]] = []
+    for item in settlements:
+        if not isinstance(item, Mapping):
+            continue
+        report_id = _text(item.get("settlement_report_id"))
+        if not report_id:
+            continue
+        detail_url = (
+            f"{API_BASE}{SETTLEMENTS_PATH}/{urllib.parse.quote(report_id, safe='')}"
+        )
+        status, body = transport(detail_url, {**BASE_HEADERS, **headers})
+        if status != 200:
+            fallidos.append({"settlement_report_id": report_id, "status": status})
+            continue
+        try:
+            detail = json.loads(body.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            fallidos.append({"settlement_report_id": report_id, "status": "cuerpo no JSON"})
+            continue
+        if not isinstance(detail, Mapping):
+            fallidos.append({"settlement_report_id": report_id, "status": "raiz no es objeto"})
+            continue
+        leidos += 1
+        for row in _deposit_rows(detail):
+            transacciones += 1
+            label = (_text(row.get("payment_method")) or "(vacio)").upper()
+            metodos[label] = metodos.get(label, 0) + 1
+
+    efectivo = sum(n for label, n in metodos.items()
+                   if any(hint in label.lower() for hint in CASH_LABELS))
+    return {
+        **base,
+        "acceso": True,
+        "auth": scheme,
+        "deposits": len(settlements),
+        "deposits_read": leidos,
+        "deposits_failed": fallidos,
+        "transactions": transacciones,
+        "by_payment_method": dict(sorted(metodos.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "efectivo_en_depositos": efectivo > 0,
+        "note": (
+            "efectivo_en_depositos: false -> el reporte de depositos tampoco trae "
+            "efectivo, que es lo esperado: Clip no deposita dinero que nunca toco."
+        ) if efectivo == 0 else (
+            "efectivo_en_depositos: true -> hay efectivo en el desglose de depositos; "
+            "ese es el camino de carga y el corte deja de ser la unica fuente."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -843,6 +1052,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     census.add_argument("--days", type=int, default=360,
                         help="cuantos dias hacia atras (default 360; el tope de Clip es un ano)")
 
+    deposits = sub.add_parser(
+        "deposits",
+        help="prueba si la cuenta puede leer el reporte de depositos, y si trae efectivo (BOS-151)",
+    )
+    deposits.add_argument("--branch", required=True)
+    deposits.add_argument("--days", type=int, default=90,
+                          help="cuantos dias hacia atras (default 90, que es el tope de Clip)")
+
     args = parser.parse_args(argv)
 
     try:
@@ -873,6 +1090,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 summarize_census(iter_payments(credentials, start, end),
                                  branch=credentials.branch),
                 indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "deposits":
+            print(json.dumps(probe_deposits(credentials, days=args.days),
+                             indent=2, ensure_ascii=False))
             return 0
 
         if args.command == "corte":

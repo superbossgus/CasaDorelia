@@ -25,11 +25,13 @@ from clip_api import (  # noqa: E402
     add_one_month,
     branch_slug,
     build_payments_url,
+    build_settlements_url,
     credential_env_names,
     fetch_rows,
     iter_payments,
     load_credentials,
     map_payment,
+    probe_deposits,
     split_window,
     summarize_census,
     summarize_corte,
@@ -626,3 +628,95 @@ def test_tope_de_paginas_por_ventana():
         list(iter_payments(CREDS, datetime(2026, 9, 28, tzinfo=timezone.utc),
                            datetime(2026, 9, 29, tzinfo=timezone.utc),
                            transport=transport, now=NOW))
+
+
+# --------------------------------------------------------------------------
+# Depositos (BOS-151)
+# --------------------------------------------------------------------------
+
+def test_el_resumen_de_depositos_va_con_fechas_sin_hora():
+    url = build_settlements_url(datetime(2026, 7, 6, 22, 8, tzinfo=timezone.utc),
+                                datetime(2026, 10, 4, 1, 30, tzinfo=timezone.utc))
+    assert "from=2026-07-06" in url
+    assert "to=2026-10-04" in url
+    # Si se colara la hora, Clip contesta 400 y el probe miente diciendo "sin acceso".
+    assert "T" not in url.split("?", 1)[1]
+
+
+def test_depositos_no_se_consultan_mas_alla_del_tope_de_clip():
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    probe_deposits(CREDS, days=360, transport=transport, now=NOW)
+    desde = transport.urls[0].split("from=")[1].split("&")[0]
+    # 90 dias es el tope documentado; pedir mas tumba la consulta completa.
+    assert desde == (NOW - timedelta(days=90)).date().isoformat()
+
+
+def test_depositos_viajan_con_el_user_agent_propio():
+    """Sin `User-Agent`, el WAF de Clip contesta 403 y parece falta de alcance.
+
+    Pasó de verdad el 2026-10-04: el probe reportaba 403 "blocked access based on
+    your browser's signature" en las dos sucursales, y eso se iba a publicar como
+    un hallazgo sobre la cuenta de Clip cuando era un encabezado faltante nuestro.
+    """
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    probe_deposits(CREDS, transport=transport, now=NOW)
+    for headers in transport.headers:
+        assert headers.get("User-Agent") == "casa-dorelia-ingesta/1.0"
+
+
+def test_un_401_en_depositos_no_se_cuenta_como_cero_efectivo():
+    """El 401 dice "no puedes ver", no "no hay". Confundirlos inventa un hueco medido."""
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert resultado["acceso"] is False
+    assert resultado["efectivo_en_depositos"] is None
+    assert [a["auth"] for a in resultado["attempts"]] == ["basic", "x-api-key", "x-api-key+basic"]
+    assert all(a["status"] == 401 for a in resultado["attempts"])
+
+
+def test_depositos_prueba_los_esquemas_hasta_que_uno_entra():
+    transport = FakeTransport([
+        (401, {"message": "Unauthorized"}),
+        (200, {"settlements": []}),
+    ])
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert resultado["acceso"] is True
+    assert resultado["auth"] == "x-api-key"
+    assert resultado["efectivo_en_depositos"] is False
+
+
+def test_el_desglose_de_depositos_cuenta_el_metodo_de_pago():
+    transport = FakeTransport([
+        (200, {"settlements": [{"settlement_report_id": "W472RZQKV"}]}),
+        (200, {"details": [{"payment_method": "DEBIT"}, {"payment_method": "CASH"}]}),
+    ])
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert resultado["transactions"] == 2
+    assert resultado["by_payment_method"] == {"CASH": 1, "DEBIT": 1}
+    assert resultado["efectivo_en_depositos"] is True
+    assert "W472RZQKV" in transport.urls[1]
+
+
+def test_el_desglose_anidado_por_dia_tambien_se_recorre():
+    transport = FakeTransport([
+        (200, {"settlements": [{"settlement_report_id": "A1"}]}),
+        (200, {"details": [
+            {"payment_date": "2026-10-01", "transactions": [
+                {"payment_method": "CREDIT"}, {"payment_method": "efectivo"},
+            ]},
+        ]}),
+    ])
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert resultado["transactions"] == 2
+    assert resultado["efectivo_en_depositos"] is True
+
+
+def test_un_desglose_que_falla_no_se_confunde_con_uno_vacio():
+    transport = FakeTransport([
+        (200, {"settlements": [{"settlement_report_id": "A1"}]}),
+        (500, {"message": "boom"}),
+    ])
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert resultado["deposits"] == 1
+    assert resultado["deposits_read"] == 0
+    assert resultado["deposits_failed"] == [{"settlement_report_id": "A1", "status": 500}]

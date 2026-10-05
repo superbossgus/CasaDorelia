@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Button } from "../components/ui/button";
+import { BranchFilter } from "../components/BranchSelect";
+import { apiErrorMessage } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import {
@@ -34,12 +36,13 @@ import useAlerts from "../hooks/useAlerts";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const Dashboard = () => {
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [cafeterias, setCafeterias] = useState([]);
   const [selectedCafeteria, setSelectedCafeteria] = useState("all");
   const [loading, setLoading] = useState(true);
-  
+  const [statsError, setStatsError] = useState(null);
+
   // Use alerts hook
   const { 
     alerts, 
@@ -72,8 +75,11 @@ const Dashboard = () => {
       const params = selectedCafeteria !== "all" ? { cafeteria_id: selectedCafeteria } : {};
       const response = await axios.get(`${API}/dashboard/stats`, { params });
       setStats(response.data);
+      setStatsError(null);
     } catch (error) {
-      toast.error("Error al cargar estadísticas");
+      const message = apiErrorMessage(error, "Error al cargar estadísticas");
+      setStatsError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -87,6 +93,25 @@ const Dashboard = () => {
   };
 
   const COLORS = ["#708238", "#8FBC8F", "#3E4B28", "#D97706"];
+
+  // Sin datos y sin error es que todavia estan en camino. Con error hay que
+  // decirlo: `!stats` tambien es cierto cuando el API contesto 403, y antes esa
+  // rama dejaba el spinner girando para siempre (BOS-154).
+  if (!loading && statsError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] gap-4 text-center">
+        <AlertTriangle className="h-10 w-10 text-[#D97706]" />
+        <p className="text-white max-w-md" data-testid="dashboard-error">{statsError}</p>
+        <Button
+          onClick={fetchStats}
+          className="bg-[#708238] hover:bg-[#5a692d] text-white"
+          data-testid="dashboard-retry"
+        >
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
 
   if (loading || !stats) {
     return (
@@ -147,30 +172,15 @@ const Dashboard = () => {
           </p>
         </div>
         
-        {isAdmin() && (
-          <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
-            <SelectTrigger 
-              className="w-[200px] bg-[#161616] border-[#27272A] text-white"
-              data-testid="cafeteria-filter"
-            >
-              <SelectValue placeholder="Todas las cafeterías" />
-            </SelectTrigger>
-            <SelectContent className="bg-[#161616] border-[#27272A]">
-              <SelectItem value="all" className="text-white hover:bg-[#27272A]">
-                Todas las cafeterías
-              </SelectItem>
-              {cafeterias.map((cafe) => (
-                <SelectItem 
-                  key={cafe.id} 
-                  value={cafe.id}
-                  className="text-white hover:bg-[#27272A]"
-                >
-                  {cafe.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <BranchFilter
+          branches={cafeterias}
+          value={selectedCafeteria}
+          onChange={setSelectedCafeteria}
+          allLabel="Todas las cafeterías"
+          placeholder="Todas las cafeterías"
+          className="w-[200px] bg-[#161616] border-[#27272A] text-white"
+          testId="cafeteria-filter"
+        />
       </div>
 
       {/* Metric Cards */}

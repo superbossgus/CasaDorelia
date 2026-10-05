@@ -1,11 +1,12 @@
 """El corte de caja y el alcance por sucursal, contra el app levantada.
 
-Nueve pasos: los ocho del corte (BOS-150) y el noveno, que mide la sucursal en
-las rutas que la reciben por query (BOS-152).
+Diez pasos: los ocho del corte (BOS-150), el noveno, que mide la sucursal en
+las rutas que la reciben por query (BOS-152), y el decimo, que mide la lista con
+la que el frontend dibuja el selector de sucursal (BOS-154).
 
 No corre con las pruebas unitarias (no empieza con `test_`) porque necesita el
-backend corriendo y un mongod. Esta aqui porque hay cinco cosas que una prueba
-del modulo **no** puede demostrar, y las cinco tocan dinero:
+backend corriendo y un mongod. Esta aqui porque hay seis cosas que una prueba
+del modulo **no** puede demostrar, y las seis tocan dinero:
 
 1. Los permisos por rol y por sucursal (`require_roles`, `_cash_cut_branch`):
    que un cajero no corrija, y que no lea ni escriba el efectivo de otra marca.
@@ -21,6 +22,11 @@ del modulo **no** puede demostrar, y las cinco tocan dinero:
    `test_branch_scope.py` sin levantar nada; lo que ninguna unitaria puede ver
    es si una ruta se olvido de invocarla — que es exactamente el defecto de
    BOS-152. Son las rutas que traen mas dinero que la del corte.
+6. Que `GET /api/cafeterias` devuelva **una sola** sucursal a `gerente`/`cajero`
+   y las dos al `admin` (BOS-154). Esa lista es la que dibuja el combo de
+   sucursal de seis pantallas: mientras devolvia las dos, el combo ofrecia
+   justo la sucursal que el punto 5 niega con 403. El 403 es correcto;
+   ofrecerlo, no.
 
 ### Correrlo
 
@@ -376,6 +382,35 @@ def main() -> int:
     check(9, "el admin si ve las dos (y por eso el reporte separa por marca)",
           stats_admin["total_sales_today"] == 1438.0,
           f"ventas_hoy={stats_admin['total_sales_today']}")
+
+    print("\n=== 10. La lista que dibuja el selector de sucursal (BOS-154) ===")
+    # El paso 9 mide que el API **niegue** la sucursal ajena. Este mide que no se
+    # ofrezca: `GET /api/cafeterias` es la lista con la que seis pantallas
+    # dibujan el combo, y devolvia las dos a cualquier rol. Elegir la otra
+    # terminaba en el 403 del paso 9 — un camino muerto en el combo.
+    for rol, headers, propia in (("cajero", cajero_tecno, "c-tecno"),
+                                 ("gerente", gerente, "c-sji")):
+        r = httpx.get(f"{BASE}/cafeterias", headers=headers, timeout=30)
+        sucursales = [c["id"] for c in r.json()] if r.status_code == 200 else []
+        check(10, f"el {rol} solo recibe su sucursal",
+              r.status_code == 200 and sucursales == [propia],
+              f"HTTP {r.status_code} sucursales={sucursales}")
+
+    r = httpx.get(f"{BASE}/cafeterias", headers=admin, timeout=30)
+    sucursales = sorted(c["id"] for c in r.json()) if r.status_code == 200 else []
+    # El admin es el unico que lee las dos marcas juntas (separadas por renglon,
+    # ver `brands.py`): si aqui recibiera una, perderia el selector completo.
+    check(10, "el admin sigue recibiendo las dos",
+          r.status_code == 200 and sucursales == ["c-sji", "c-tecno"],
+          f"HTTP {r.status_code} sucursales={sucursales}")
+
+    # Que la lista traiga el nombre importa tanto como que traiga una sola: el
+    # combo de un solo elemento se dibuja como rotulo con ese nombre, y vacio se
+    # leeria como "sin sucursal".
+    uno = httpx.get(f"{BASE}/cafeterias", headers=cajero, timeout=30).json()
+    check(10, "y la sucursal propia viene con nombre, no solo con id",
+          len(uno) == 1 and bool(uno[0].get("name")),
+          f"name={(uno[0] if uno else {}).get('name')!r}")
 
     print("\n" + "=" * 70)
     failed = [r for r in results if not r[2]]

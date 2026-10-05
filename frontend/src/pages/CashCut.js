@@ -26,6 +26,8 @@ import { Badge } from "../components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { BranchField } from "../components/BranchSelect";
+import { apiErrorMessage } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
@@ -52,7 +54,7 @@ const EMPTY_FORM = {
 };
 
 const CashCut = () => {
-  const { user, isAdmin, canManage } = useAuth();
+  const { user, canManage } = useAuth();
   const [cafeterias, setCafeterias] = useState([]);
   const [cafeteriaId, setCafeteriaId] = useState(user?.cafeteria_id || "");
   const [businessDate, setBusinessDate] = useState("");
@@ -74,7 +76,7 @@ const CashCut = () => {
           setCafeteriaId(user?.cafeteria_id || response.data[0].id);
         }
       } catch (error) {
-        toast.error("No se pudieron cargar las sucursales");
+        toast.error(apiErrorMessage(error, "No se pudieron cargar las sucursales"));
       }
     };
     fetchCafeterias();
@@ -119,7 +121,7 @@ const CashCut = () => {
       });
       setHistory(data);
     } catch (error) {
-      toast.error("No se pudo cargar el historial de cortes");
+      toast.error(apiErrorMessage(error, "No se pudo cargar el historial de cortes"));
     }
   }, [cafeteriaId]);
 
@@ -218,21 +220,19 @@ const CashCut = () => {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          <Select value={cafeteriaId} onValueChange={setCafeteriaId} disabled={!isAdmin}>
-            <SelectTrigger
-              className="w-full sm:w-[220px] bg-[#161616] border-[#27272A] text-white"
-              data-testid="cash-cut-branch-select"
-            >
-              <SelectValue placeholder="Sucursal" />
-            </SelectTrigger>
-            <SelectContent className="bg-[#161616] border-[#27272A]">
-              {cafeterias.map((cafe) => (
-                <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">
-                  {cafe.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* `disabled={!isAdmin}` no desactivaba nada: `isAdmin` es la funcion,
+              asi que `!isAdmin` es siempre `false`. El cajero elegia la otra
+              sucursal y el corte contestaba 403 (BOS-150, BOS-154). Ahora el
+              combo depende de lo que trae la lista, no de un rol. */}
+          <BranchField
+            branches={cafeterias}
+            value={cafeteriaId}
+            onChange={setCafeteriaId}
+            label={null}
+            placeholder="Sucursal"
+            className="w-full sm:w-[220px] bg-[#161616] border-[#27272A] text-white"
+            testId="cash-cut-branch-select"
+          />
           <Input
             type="date"
             value={businessDate}
@@ -302,7 +302,11 @@ const CashCut = () => {
                     Contado {money(existing.efectivo_contado)} + retiros {money(existing.retiros)} âˆ’
                     fondo {money(existing.fondo_inicial)}
                   </div>
-                  {canManage && (
+                  {/* `canManage` es la funcion, asi que `canManage &&` era
+                      siempre cierto y el boton se dibujaba tambien al cajero —
+                      que al pulsarlo recibe el 403 de `PUT /cash-cuts/{id}`.
+                      El mismo dedazo que el `disabled={!isAdmin}` de arriba. */}
+                  {canManage() && (
                     <Button
                       variant="outline"
                       onClick={() => {

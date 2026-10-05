@@ -1791,7 +1791,28 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_roles([
 
 @api_router.get("/cafeterias", response_model=List[CafeteriaResponse])
 async def get_cafeterias(current_user: dict = Depends(get_current_user)):
+    """Las sucursales que este usuario puede pedir, no las que existen.
+
+    Esta lista es la que dibuja el selector de sucursal de seis pantallas. Si
+    devuelve las dos a un `gerente`/`cajero`, el combo ofrece la sucursal que
+    las 14 rutas con `cafeteria_id` niegan con 403 desde BOS-152: un camino
+    muerto (BOS-154). Acotarla aqui apaga el camino en las seis de una vez.
+
+    `scoped_cafeteria(None, ...)` es la misma regla que revalida el parametro en
+    esas rutas, invocada **sin** sucursal pedida: devuelve la del token para los
+    roles con sucursal propia y `None` (= todas) para `admin`/`superadmin`. Sin
+    el `None` no se podria reusar: con una sucursal pedida, lanza el 403.
+
+    Ojo con el campo: en el resto de las rutas la sucursal es `cafeteria_id` del
+    documento, pero aqui la sucursal **es** el documento, asi que filtra por
+    `id`. Nada mas usa esta ruta para rotular nombres de la otra marca: los
+    rotulos del backend leen `db.cafeterias` directo, y el unico rotulador del
+    frontend (`Users.js`) es pantalla de admin, que sigue viendo las dos.
+    """
     tenant_filter = get_tenant_filter(current_user)
+    own_branch = scoped_cafeteria(None, current_user)
+    if own_branch:
+        tenant_filter["id"] = own_branch
     cafeterias = await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)
     return [CafeteriaResponse(**c) for c in cafeterias]
 

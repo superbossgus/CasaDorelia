@@ -130,6 +130,23 @@ y la tarjeta publica la razon. Es para el republicado automatico, donde la
 alternativa a un panel desfasado no es "ningun tablero" sino el tablero de ayer
 (ver `load_apertura_degrading`).
 
+### El responsable, y por que nunca va a secas
+
+Cada renglon abierto dibuja **un nombre** (BOS-165). No es decoracion: en el
+corte del 04/10/2026 los 19 renglones de la hoja con responsable con nombre
+estaban los 19 `Entregado`, y los 19 sin nombre seguian abiertos salvo uno. El
+nombre es la variable que predice el cierre, asi que el tablero —la pantalla que
+se abre a diario— tiene que traerlo.
+
+Lo que el panel **no** puede hacer es convertir un supuesto en un hecho. El dueño
+de estos renglones se derivo de la hoja, no de su palabra, asi que el renglon
+dice el nombre *y* dice `sin confirmar` a la vista. Un nombre solo insinua dueño
+aceptado, y quien lee el tablero es el dueño del negocio: ahi un nombre sin
+rotulo es peor que no poner nombre. Eso esta en el validador, no en la buena
+memoria de quien edite el JSON: nombrar un renglon obliga a declarar
+`owner_confirmed`, y declararlo `true` obliga a citar donde consta
+(`owner_confirmed_ref`). Ver `_normalize_owner`.
+
 ### Que esta pagina no puede hacer sola
 
 Es un HTML generado: **no se actualiza solo**. Quien lo publica tiene que volver
@@ -304,6 +321,83 @@ def day_states(*, axis: Sequence[str], last_capture: Mapping[str, int],
     return states
 
 
+# Los tres rotulos del responsable. Viven aqui, en Python, y no en la plantilla
+# ni en el JSON: el renderizador solo imprime el texto que le llega, asi que el
+# dia que alguno cambie no hay dos copias que puedan quedar en desacuerdo.
+#
+# `sin responsable` es **literal** y a proposito: no un guion ni un vacio. "No
+# sabemos quien" es un dato —es justo el grupo que la medicion del 04/10 muestra
+# que no se cierra—, y un guion se lee como que falto llenar la celda.
+OWNER_NONE_LABEL = "sin responsable"
+OWNER_UNCONFIRMED_LABEL = "sin confirmar"
+OWNER_FIELDS = ("owner", "owner_confirmed", "owner_confirmed_ref", "owner_note")
+
+
+def _normalize_owner(row: Dict[str, Any], where: str) -> None:
+    """Resuelve el rotulo de responsable de un renglon, o truena.
+
+    Deja tres campos listos para dibujar y uno para contar:
+
+    - `owner_label`: el nombre, o `sin responsable` cuando no hay.
+    - `owner_flag`: `sin confirmar` cuando el dueño es un supuesto; ausente
+      cuando esta confirmado o cuando no hay nombre.
+    - `owner_note`: lo que acompaña al nombre (quien autoriza el gasto, que hay
+      que confirmar). Pasa tal cual.
+    - `owner_named`: si el renglon tiene nombre. El panel cuenta sobre esto en
+      vez de adivinarlo del texto del rotulo.
+
+    Y aplica la regla que importa mas que el campo: **nombrar un renglon obliga
+    a declarar si el dueño lo confirmo.** Sin `owner_confirmed` truena, porque el
+    default silencioso tendria que ser alguno de los dos y los dos son caros:
+    `false` por omision rotularia como supuesto un dueño que si confirmo, y
+    `true` por omision publicaria un supuesto mio como hecho aceptado. Declararlo
+    `true` exige ademas decir donde consta: una confirmacion sin cita no se puede
+    auditar, y este rotulo solo se cae cuando el dueño habla.
+    """
+    owner = row.get("owner")
+    if owner is None:
+        row["owner_label"] = OWNER_NONE_LABEL
+        row["owner_named"] = False
+        return
+    if not isinstance(owner, str) or not owner.strip():
+        raise DashboardError(
+            f"{where}: `owner` tiene que ser un nombre, no {owner!r}")
+    confirmed = row.get("owner_confirmed")
+    if not isinstance(confirmed, bool):
+        raise DashboardError(
+            f"{where}: trae el nombre «{owner}» pero no declara "
+            "`owner_confirmed`. Un nombre a secas se lee como dueño aceptado; "
+            "si el dueño salio de la hoja y no de su palabra, va "
+            "`owner_confirmed: false`")
+    if confirmed and not str(row.get("owner_confirmed_ref") or "").strip():
+        raise DashboardError(
+            f"{where}: declara confirmado a «{owner}» sin `owner_confirmed_ref`. "
+            "Una confirmacion sin cita no se puede auditar: pon donde consta "
+            "(tarea, comentario o quien lo dijo)")
+    row["owner_label"] = owner.strip()
+    row["owner_named"] = True
+    if not confirmed:
+        row["owner_flag"] = OWNER_UNCONFIRMED_LABEL
+
+
+def _normalize_overdue(row: Dict[str, Any], where: str) -> None:
+    """Rotula el vencimiento de un renglon a partir de su fecha, no de un texto.
+
+    El rotulo se *calcula* de `overdue_since` por la misma razon que la
+    antiguedad del corte: un «vencido desde el 25/09» escrito a mano sobrevive a
+    que la fecha cambie, y entonces el tablero afirma un vencimiento que ya no
+    es el que dice el dato.
+    """
+    since = row.get("overdue_since")
+    if since is None:
+        return
+    cut = _local_datetime(since)
+    if cut is None:
+        raise DashboardError(
+            f"{where}: `overdue_since` no es una fecha: {since!r}")
+    row["overdue_label"] = "vencido desde el " + cut.strftime("%d/%m")
+
+
 def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Panel de pendientes operativos, desde un JSON aparte y con controles.
 
@@ -322,9 +416,12 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
     3. Cada bloqueante tiene que estar en la lista de pendientes (por `ref`), o
        traer `fuera_de_hoja: true` dicho explicitamente (el caso de los anexos
        del contrato, que no son renglones de la hoja).
+    4. Un renglon nombrado tiene que declarar si su dueño lo confirmo, y una
+       confirmacion tiene que citar donde consta (ver `_normalize_owner`).
 
-    La antiguedad del corte se *calcula* contra el dia de generacion: el panel
-    no puede decir "al dia" porque alguien escribio eso una vez.
+    La antiguedad del corte y el rotulo de vencido se *calculan* contra la fecha
+    del dato: el panel no puede decir "al dia" ni "vencido desde el 25/09"
+    porque alguien escribio eso una vez.
     """
     try:
         with open(path, encoding="utf-8") as handle:
@@ -348,7 +445,7 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
             f"el corte de la hoja no cuadra: {source['delivered']} entregados + "
             f"{source['pending']} pendientes != {source['rows']} renglones")
 
-    pending_rows = list(data.get("pending_rows") or [])
+    pending_rows = [dict(row) for row in (data.get("pending_rows") or [])]
     if pending_rows and len(pending_rows) != source["pending"]:
         raise DashboardError(
             f"la lista de pendientes trae {len(pending_rows)} renglones pero el "
@@ -364,6 +461,28 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
                 raise DashboardError(
                     f"el bloqueante {blocker.get('ref')} no esta entre los "
                     "pendientes de la hoja (ni se declara `off_sheet`)")
+
+    # El mismo `ref` es el mismo renglon de la hoja, asi que el responsable se
+    # escribe **una vez** —en el bloqueante— y el pendiente homonimo lo hereda.
+    # Hoy el panel no dibuja esos pendientes (el renderizador quita los que ya
+    # salen como bloqueantes), pero duplicar el nombre a mano es como se llega a
+    # que el mismo renglon aparezca con dos dueños distintos el dia que uno de
+    # los dos se edite.
+    by_ref = {str(b.get("ref")): b for b in blockers}
+    for row in pending_rows:
+        twin = by_ref.get(str(row.get("ref")))
+        if twin is None or row.get("owner") is not None:
+            continue
+        for field in OWNER_FIELDS:
+            if field in twin:
+                row[field] = twin[field]
+
+    for blocker in blockers:
+        _normalize_owner(blocker, f"el bloqueante {blocker.get('ref')}")
+        _normalize_overdue(blocker, f"el bloqueante {blocker.get('ref')}")
+    for row in pending_rows:
+        _normalize_owner(row, f"el pendiente {row.get('ref')}")
+        _normalize_overdue(row, f"el pendiente {row.get('ref')}")
 
     now = now or datetime.now(timezone.utc)
     cut = _local_datetime(source["modified_at"])
@@ -1444,6 +1563,25 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .open-list .what b { color: var(--text-primary); font-weight: 600; }
   .open-list .meta { display: block; color: var(--text-muted); font-size: 12px;
     margin-top: 1px; }
+  /* El responsable: renglon propio, debajo de la meta. El nombre no puede
+     quedar del color del texto secundario porque es lo que se busca al leer la
+     lista, y `sin confirmar` no puede quedar del color del nombre porque
+     entonces se leeria como parte de el. */
+  .open-list .who { display: block; font-size: 12px; margin-top: 3px;
+    color: var(--text-muted); }
+  .open-list .who-lab { text-transform: uppercase; letter-spacing: .04em;
+    font-size: 10px; margin-right: 6px; }
+  .open-list .who b { color: var(--text-primary); font-weight: 600; }
+  .open-list .who.nobody b { color: var(--text-muted); font-weight: 500;
+    font-style: italic; }
+  /* Chip, no tooltip: el rotulo tiene que estar a la vista en el renglon. Trae
+     borde ademas de color para que no dependa de distinguir tonos. */
+  .open-list .unconf, .open-list .late { display: inline-block; margin-left: 7px;
+    padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 17px;
+    border: 1px solid currentColor; }
+  .open-list .unconf { color: var(--warning); }
+  .open-list .late { color: var(--critical); }
+  .open-list .who-note { display: block; margin-top: 1px; }
   .open-rest { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); }
   .open-rest h3 { font-size: 13px; font-weight: 600; margin: 0 0 3px;
     color: var(--text-primary); }
@@ -2256,6 +2394,16 @@ _TEMPLATE = r"""<!DOCTYPE html>
     document.getElementById("apertura-title").textContent = A.title;
     document.getElementById("apertura-hint").textContent = A.hint || "";
 
+    // Los pendientes que ya salen arriba como bloqueantes no se repiten. Se
+    // calcula aqui, antes de los numeros de cabecera, porque el conteo de
+    // responsables es sobre los renglones **dibujados**: contar los 18 de la
+    // hoja diria que faltan nombres en renglones que esta lista no muestra.
+    var others = (A.pending_rows || []).filter(function (p) {
+      return !A.blockers.some(function (b) { return String(b.ref) === String(p.ref); });
+    });
+    var shown = A.blockers.concat(others);
+    var named = shown.filter(function (r) { return r.owner_named; }).length;
+
     function stat(host, value, label, warn) {
       var box = el("div");
       box.appendChild(el("div", "open-num" + (warn ? " warn" : ""), value));
@@ -2268,6 +2416,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
       A.blockers.length > 0);
     stat(head, NUM.format(A.source.pending) + " de " + NUM.format(A.source.rows),
       "renglones «Pendiente» en la hoja de seguimiento", false);
+    // El numero que predice el cierre: en el corte del 04/10 los 19 renglones de
+    // la hoja con responsable con nombre estaban los 19 entregados, y los 19 sin
+    // nombre seguian abiertos salvo uno. Se cuenta, no se escribe.
+    stat(head, NUM.format(named) + " de " + NUM.format(shown.length),
+      "renglones abiertos con responsable con nombre", named < shown.length);
     var dias = A.source.stale_days;
     stat(head, dias === 0 ? "hoy" : NUM.format(dias) + (dias === 1 ? " dia" : " dias"),
       "sin movimiento en la hoja (corte " + A.source.modified_label + ")", dias >= 3);
@@ -2297,6 +2450,22 @@ _TEMPLATE = r"""<!DOCTYPE html>
       if (item.note) { bits.push(item.note); }
       if (item.issue) { bits.push("tarea " + item.issue); }
       if (bits.length) { what.appendChild(el("span", "meta", bits.join(" · "))); }
+      // El responsable va en su propio renglon, no mezclado con el resto de la
+      // meta: es el dato que predice el cierre y es lo que se busca al leer la
+      // lista. Los rotulos los calcula `_normalize_owner`; aqui solo se
+      // imprimen, para que no haya una segunda copia de los literales.
+      var who = el("span", "who" + (item.owner_named ? "" : " nobody"));
+      who.appendChild(el("span", "who-lab", "responsable"));
+      who.appendChild(el("b", null, item.owner_label));
+      // `sin confirmar` es texto a la vista, no un tooltip: el dueño salio de la
+      // hoja y no de su palabra, y el rotulo es justo lo que impide que el
+      // tablero lo publique como dueño aceptado.
+      if (item.owner_flag) { who.appendChild(el("span", "unconf", item.owner_flag)); }
+      if (item.overdue_label) {
+        who.appendChild(el("span", "late", item.overdue_label));
+      }
+      if (item.owner_note) { who.appendChild(el("span", "who-note", item.owner_note)); }
+      what.appendChild(who);
       li.appendChild(what);
       return li;
     }
@@ -2306,9 +2475,6 @@ _TEMPLATE = r"""<!DOCTYPE html>
     A.blockers.forEach(function (b) { blockers.appendChild(row(b, true)); });
 
     var rest = document.getElementById("apertura-rest");
-    var others = (A.pending_rows || []).filter(function (p) {
-      return !A.blockers.some(function (b) { return String(b.ref) === String(p.ref); });
-    });
     if (!others.length) { rest.hidden = true; return; }
     rest.hidden = false;
     // El conteo va en el rotulo, calculado: una lista recortada no puede

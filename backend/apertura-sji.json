@@ -8,6 +8,23 @@
     "cuadren con el total de la hoja, asi que un archivo a medias no se dibuja:",
     "truena con el renglon que no cuadra."
   ],
+  "_comentario_responsable": [
+    "`owner` es el responsable del renglon y es el unico nombre que existe en la",
+    "hoja: Said Nuñez. Un renglon sin ese nombre NO lleva owner — el tablero lo",
+    "rotula `sin responsable`, que es el dato correcto. No se inventan dueños.",
+    "",
+    "`owner_confirmed: false` dice que el dueño es un supuesto: se derivo de la",
+    "hoja (decision de GM del 04/10/2026, comentario 8e0cb33d en BOS-111), no de",
+    "la palabra de Said. El tablero dibuja `sin confirmar` junto al nombre, y esa",
+    "es la razon de que el campo sea obligatorio cuando hay nombre: la regla 3 de",
+    "BOS-38 prohibe dar un renglon por cerrado sin confirmacion del responsable,",
+    "y un nombre a secas arriba del tablero ya insinua dueño aceptado.",
+    "",
+    "El `false` solo se quita cuando Said o Gustavo confirman o vetan por",
+    "comentario (BOS-5, BOS-111 o BOS-165), y entonces hay que poner",
+    "`owner_confirmed_ref` con donde consta: load_apertura truena si se declara",
+    "confirmado sin cita."
+  ],
   "title": "Apertura SJI: lo que todavia falta",
   "hint": "No es venta. Es la lista de pendientes de apertura de Casa Dorelia SJI (Plateros 162), tomada de la hoja de seguimiento y del tablero. Esta aqui porque este tablero es lo que se abre a diario: el conteo deja de depender de que alguien abra una tarjeta.",
   "source": {
@@ -29,7 +46,10 @@
       "priority": "Alta",
       "status": "Pendiente en la hoja",
       "note": "pizza, croissant, baguette, grilled cheese: lista de insumos",
-      "issue": "BOS-41"
+      "issue": "BOS-41",
+      "owner": "Said Nuñez",
+      "owner_confirmed": false,
+      "owner_note": "autoriza el gasto: Gustavo Jiménez"
     },
     {
       "ref": "#22",
@@ -38,7 +58,10 @@
       "priority": "Alta",
       "status": "Pendiente en la hoja",
       "note": "refrescos, agua, leches: definir par stock",
-      "issue": "BOS-42"
+      "issue": "BOS-42",
+      "owner": "Said Nuñez",
+      "owner_confirmed": false,
+      "owner_note": "autoriza el gasto: Gustavo Jiménez"
     },
     {
       "ref": "#28",
@@ -47,7 +70,10 @@
       "priority": "Alta",
       "status": "Pendiente en la hoja",
       "note": "recetas, tiempos, temperaturas, armado",
-      "issue": "BOS-7"
+      "issue": "BOS-7",
+      "owner": "Said Nuñez",
+      "owner_confirmed": false,
+      "owner_note": "no requiere dinero: imprimir y plastificar"
     },
     {
       "ref": "Anexo J",
@@ -57,11 +83,15 @@
       "status": "sin check en la hoja de anexos",
       "note": "indispensable para reducir riesgo de clausura",
       "issue": "BOS-6",
-      "off_sheet": true
+      "off_sheet": true,
+      "owner": "Said Nuñez",
+      "owner_confirmed": false,
+      "owner_note": "confirmar 7 papeles del Bloque A"
     }
   ],
   "pending_rows": [
-    { "ref": "#7", "title": "Bote de basura: separar organico e inorganico", "group": "Espacio fisico", "priority": "Media" },
+    { "ref": "#7", "title": "Bote de basura: separar organico e inorganico", "group": "Espacio fisico", "priority": "Media",
+      "owner": "Said Nuñez", "owner_confirmed": false, "overdue_since": "2026-09-25" },
     { "ref": "#9", "title": "Tapete «Casa Dorelia»", "group": "Espacio fisico", "priority": "Media" },
     { "ref": "#10", "title": "Limpieza de toldo (sopladora)", "group": "Espacio fisico", "priority": "Media" },
     { "ref": "#12", "title": "Maceta", "group": "Espacio fisico", "priority": "Baja" },

@@ -455,6 +455,146 @@ def test_sin_archivo_de_apertura_la_tarjeta_no_existe_en_vez_de_salir_vacia():
     assert 'id="apertura-card" hidden' in html
 
 
+# --- El responsable por renglon (BOS-165) -----------------------------------
+#
+# El nombre es la variable que predice el cierre: en el corte del 04/10/2026 los
+# 19 renglones de la hoja con responsable con nombre estaban los 19 `Entregado`,
+# y los 19 sin nombre seguian abiertos salvo uno. Lo que estos casos protegen no
+# es que el nombre se dibuje —eso se ve— sino que **no se pueda dibujar a secas**
+# cuando el dueño es un supuesto.
+
+def test_un_renglon_sin_nombre_dice_sin_responsable_y_no_un_guion(tmp_path):
+    # "No sabemos quien" es un dato, y es justo el grupo que no se cierra. Un
+    # guion o un vacio se leen como que falto llenar la celda.
+    a = load_apertura(apertura_file(tmp_path))
+    tapete = [p for p in a["pending_rows"] if p["ref"] == "#9"][0]
+    assert tapete["owner_label"] == "sin responsable"
+    assert tapete["owner_named"] is False
+    assert "owner_flag" not in tapete
+
+
+def test_un_nombre_sin_declarar_confirmacion_no_se_dibuja(tmp_path):
+    # Esta es la regla que importa mas que el campo. Un nombre a secas insinua
+    # que el renglon tiene dueño aceptado, y quien lee el tablero es el dueño del
+    # negocio: ahi un supuesto publicado como hecho es peor que no poner nombre.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                                 "owner": "Said Nuñez"},
+                                {"ref": "Anexo J", "title": "Permisos",
+                                 "off_sheet": True}]))
+    assert "owner_confirmed" in str(exc.value)
+    assert "#27" in str(exc.value)
+
+
+def test_declarar_confirmado_exige_decir_donde_consta(tmp_path):
+    # Una confirmacion sin cita no se puede auditar, y este rotulo solo se cae
+    # cuando el dueño habla. Sin `owner_confirmed_ref` cualquiera podria apagar
+    # el «sin confirmar» editando un booleano.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                                 "owner": "Said Nuñez", "owner_confirmed": True},
+                                {"ref": "Anexo J", "title": "Permisos",
+                                 "off_sheet": True}]))
+    assert "owner_confirmed_ref" in str(exc.value)
+
+    # Con la cita si pasa, y entonces el renglon deja de rotular el supuesto.
+    a = load_apertura(apertura_file(
+        tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                             "owner": "Said Nuñez", "owner_confirmed": True,
+                             "owner_confirmed_ref": "BOS-111 comentario 8e0cb33d"},
+                            {"ref": "Anexo J", "title": "Permisos",
+                             "off_sheet": True}]))
+    assert a["blockers"][0]["owner_label"] == "Said Nuñez"
+    assert "owner_flag" not in a["blockers"][0]
+
+
+def test_un_dueño_supuesto_se_dibuja_con_su_rotulo_a_la_vista(tmp_path):
+    a = load_apertura(apertura_file(
+        tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                             "owner": "Said Nuñez", "owner_confirmed": False,
+                             "owner_note": "autoriza el gasto: Gustavo Jiménez"},
+                            {"ref": "Anexo J", "title": "Permisos",
+                             "off_sheet": True}]))
+    blocker = a["blockers"][0]
+    assert blocker["owner_label"] == "Said Nuñez"
+    assert blocker["owner_flag"] == "sin confirmar"
+
+    # Y llega a la pagina. Ojo con lo que esto prueba: el modelo viaja embebido,
+    # asi que "esta el nombre en el HTML" tambien seria cierto si el renderizador
+    # lo ignorara. Lo que se afirma aqui es el cableado —el renglon lee los tres
+    # campos— y que el rotulo sea **texto del renglon** y no un `title=`, o sea
+    # un tooltip que nadie va a abrir.
+    html = render_html(dict(model([sale("2026-10-03", 200.0)]), apertura=a))
+    assert "Said Nuñez" in html
+    assert "autoriza el gasto: Gustavo Jiménez" in html
+    for campo in ("item.owner_label", "item.owner_flag", "item.owner_note"):
+        assert campo in html, f"el renglon dejo de leer {campo}"
+    # El rotulo se agrega como hijo con texto (`el(...)` pone `textContent`), no
+    # como atributo: el renglon del panel no setea ningun `.title`. (En otras
+    # partes de la pagina si hay tooltips —la columna de efectivo tiene uno—, asi
+    # que el control va sobre esta funcion y no sobre el HTML entero.)
+    assert 'el("span", "unconf", item.owner_flag)' in html
+    renglon = html.split("function row(item, isBlocker) {")[1].split("\n    }")[0]
+    assert ".title =" not in renglon and "title:" not in renglon
+
+
+def test_el_mismo_renglon_no_puede_terminar_con_dos_dueños(tmp_path):
+    # El mismo `ref` es el mismo renglon de la hoja. El nombre se escribe una vez
+    # —en el bloqueante— y el pendiente homonimo lo hereda, porque duplicarlo a
+    # mano es como se llega a que #27 diga «Said Nuñez» arriba y «sin
+    # responsable» abajo el dia que alguien edite solo uno de los dos.
+    a = load_apertura(apertura_file(
+        tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                             "owner": "Said Nuñez", "owner_confirmed": False},
+                            {"ref": "Anexo J", "title": "Permisos",
+                             "off_sheet": True}]))
+    gemelo = [p for p in a["pending_rows"] if p["ref"] == "#27"][0]
+    assert gemelo["owner_label"] == "Said Nuñez"
+    assert gemelo["owner_flag"] == "sin confirmar"
+
+
+def test_el_vencimiento_se_calcula_de_la_fecha_no_se_escribe(tmp_path):
+    # Mismo principio que la antiguedad del corte: un «vencido desde el 25/09»
+    # escrito a mano sobrevive a que la fecha cambie, y entonces el tablero
+    # afirma un vencimiento que ya no es el que dice el dato.
+    a = load_apertura(apertura_file(
+        tmp_path, pending_rows=[{"ref": "#27", "title": "Materia prima"},
+                                {"ref": "#7", "title": "Botes de basura",
+                                 "overdue_since": "2026-09-25"}]))
+    bote = [p for p in a["pending_rows"] if p["ref"] == "#7"][0]
+    assert bote["overdue_label"] == "vencido desde el 25/09"
+
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, pending_rows=[{"ref": "#27", "title": "Materia prima"},
+                                    {"ref": "#7", "title": "Botes",
+                                     "overdue_since": "el jueves"}]))
+    assert "overdue_since" in str(exc.value)
+
+
+def test_el_conteo_de_responsables_se_cuenta_sobre_lo_dibujado(tmp_path):
+    # El panel no repite los pendientes que ya salen como bloqueantes, asi que el
+    # conteo tiene que ser sobre los renglones dibujados. Sobre los de la hoja
+    # diria que faltan nombres en renglones que la lista no muestra.
+    a = load_apertura(apertura_file(
+        tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                             "owner": "Said Nuñez", "owner_confirmed": False},
+                            {"ref": "Anexo J", "title": "Permisos",
+                             "off_sheet": True}]))
+    refs = {str(b["ref"]) for b in a["blockers"]}
+    dibujados = a["blockers"] + [p for p in a["pending_rows"]
+                                 if str(p["ref"]) not in refs]
+    # 2 bloqueantes + 1 pendiente (#9); #27 no se repite.
+    assert len(dibujados) == 3
+    assert sum(1 for r in dibujados if r["owner_named"]) == 1
+    # El rotulo del conteo lo arma la pagina con estos campos, no con un numero
+    # escrito en el JSON.
+    html = render_html(dict(model([sale("2026-10-03", 200.0)]), apertura=a))
+    assert "renglones abiertos con responsable con nombre" in html
+
+
 def test_el_panel_no_rompe_el_autocontenido_de_la_pagina(tmp_path):
     from datetime import datetime, timezone
 

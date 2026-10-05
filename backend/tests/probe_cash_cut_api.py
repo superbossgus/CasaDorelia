@@ -1,8 +1,11 @@
-"""Los nueve pasos del corte de caja contra el app levantada (BOS-150).
+"""El corte de caja y el alcance por sucursal, contra el app levantada.
+
+Nueve pasos: los ocho del corte (BOS-150) y el noveno, que mide la sucursal en
+las rutas que la reciben por query (BOS-152).
 
 No corre con las pruebas unitarias (no empieza con `test_`) porque necesita el
-backend corriendo y un mongod. Esta aqui porque hay cuatro cosas que una prueba
-del modulo **no** puede demostrar, y las cuatro tocan dinero:
+backend corriendo y un mongod. Esta aqui porque hay cinco cosas que una prueba
+del modulo **no** puede demostrar, y las cinco tocan dinero:
 
 1. Los permisos por rol y por sucursal (`require_roles`, `_cash_cut_branch`):
    que un cajero no corrija, y que no lea ni escriba el efectivo de otra marca.
@@ -13,6 +16,11 @@ del modulo **no** puede demostrar, y las cuatro tocan dinero:
    completo. Ese fue el defecto 1 de BOS-150.
 4. Que el dia de operacion que elige el servidor sea el del negocio (UTC-6) y
    no el dia UTC.
+5. Que las 13 rutas que reciben `cafeteria_id` por query **llamen** al helper
+   que lo revalida (`branch_scope.scoped_cafeteria`). La regla en si la fija
+   `test_branch_scope.py` sin levantar nada; lo que ninguna unitaria puede ver
+   es si una ruta se olvido de invocarla — que es exactamente el defecto de
+   BOS-152. Son las rutas que traen mas dinero que la del corte.
 
 ### Correrlo
 
@@ -76,6 +84,31 @@ def check(step, name, ok, detail):
     print(f"  [{'PASS' if ok else 'FALLA'}] {name}: {detail}")
 
 
+def card_sale(cafeteria_id, brand, day, total):
+    """Una venta con la forma que escribe el cargador de Clip.
+
+    Importa que sea la forma **real**: `SaleResponse` exige
+    `items`/`subtotal`/`tax`/`cost_total` y `dashboard/stats` recorre
+    `sale["items"]`. Con el renglon minimo que le bastaba al corte, esas rutas
+    contestan 500 — y un 500 se lee igual que un permiso mal puesto, asi que el
+    paso 9 no podria distinguir "me lo nego" de "se cayo".
+    """
+    subtotal = round(total / 1.16, 2)
+    return {
+        "id": str(uuid.uuid4()), "tenant_id": None,
+        "cafeteria_id": cafeteria_id, "brand": brand,
+        "items": [{"product_id": None, "product_name": "Venta Clip (sin desglose)",
+                   "quantity": 1, "unit_price": subtotal, "subtotal": subtotal,
+                   "cost": 0.0}],
+        "subtotal": subtotal, "tax": round(total - subtotal, 2), "total": total,
+        "cost_total": 0.0, "profit": 0.0, "cost_known": False,
+        "payment_method": "tarjeta", "created_by": "probe",
+        "business_date": day, "created_at": f"{day}T18:00:00+00:00",
+        "source": "clip_api", "dedup_key": f"probe:{uuid.uuid4()}",
+        "inventory_applied": False,
+    }
+
+
 def seed(db, today):
     if PROBE_DB in ("casa_dorelia", "casa_dorelia_prod"):
         raise SystemExit(f"ERROR: {PROBE_DB} es la base real. El probe siembra "
@@ -92,12 +125,15 @@ def seed(db, today):
                              "password": hashed, "is_active": True, "created_at": now})
     # Venta con tarjeta del dia: sin ella no se puede ver que el total del dia
     # es tarjeta + efectivo, que es el numero que lee la sucursal.
-    for total in (120.0, 340.5, 89.5):
-        db.sales.insert_one({"id": str(uuid.uuid4()), "tenant_id": None,
-                             "cafeteria_id": "c-sji", "brand": "casa-dorelia",
-                             "business_date": today, "created_at": f"{today}T18:00:00+00:00",
-                             "total": total, "profit": 0.0, "payment_method": "tarjeta",
-                             "source": "clip_api"})
+    #
+    # Las dos sucursales siembran venta a proposito: con una sola, una ruta que
+    # devolviera **todo** pasaria igual la prueba de "solo veo lo mio".
+    for cafeteria_id, brand, totales in (
+        ("c-sji", "casa-dorelia", (120.0, 340.5, 89.5)),
+        ("c-tecno", "le-pain-dore", (777.0, 111.0)),
+    ):
+        for total in totales:
+            db.sales.insert_one(card_sale(cafeteria_id, brand, today, total))
 
 
 def login(email):
@@ -291,6 +327,55 @@ def main() -> int:
     check(8, "un dia futuro no se puede contar: 400",
           r.status_code == 400 and "futuro" in r.json().get("detail", ""),
           f"HTTP {r.status_code}")
+
+    print("\n=== 9. La sucursal, en las rutas que la reciben por query (BOS-152) ===")
+    # `rol` dice con cual de los dos roles con sucursal se prueba la ruta:
+    # las rutas con `require_roles([admin, gerente])` contestarian 403 a un
+    # cajero por el rol, no por la sucursal, y ese 403 seria un falso PASS.
+    rutas = [
+        ("/sales", "cajero"),
+        ("/dashboard/stats", "cajero"),
+        ("/cash-cuts", "cajero"),
+        ("/ingredient-inventory", "cajero"),
+        ("/ingredient-inventory/alerts", "cajero"),
+        ("/inventory", "cajero"),
+        ("/purchases", "cajero"),
+        ("/pos/orders", "cajero"),
+        ("/pos/kitchen", "cajero"),
+        ("/reports/sales/pdf", "gerente"),
+        ("/reports/sales/excel", "gerente"),
+        ("/reports/products/pdf", "gerente"),
+        ("/reports/ingredient-consumption", "gerente"),
+        ("/reports/profit-analysis", "gerente"),
+    ]
+    # El de Tecnoparque pide SJI y el gerente de SJI pide Tecnoparque: en los dos
+    # casos la sucursal pedida es la de **otra marca**.
+    quien = {"cajero": (cajero_tecno, "c-tecno", "c-sji"),
+             "gerente": (gerente, "c-sji", "c-tecno")}
+    for ruta, rol in rutas:
+        headers, propia, ajena = quien[rol]
+        r = httpx.get(f"{BASE}{ruta}", params={"cafeteria_id": ajena}, headers=headers, timeout=60)
+        check(9, f"GET {ruta} con otra sucursal: 403", r.status_code == 403,
+              f"HTTP {r.status_code}")
+        r = httpx.get(f"{BASE}{ruta}", params={"cafeteria_id": propia}, headers=headers, timeout=60)
+        check(9, f"GET {ruta} con la propia sigue abierta", r.status_code == 200,
+              f"HTTP {r.status_code}")
+        r = httpx.get(f"{BASE}{ruta}", params={"cafeteria_id": "c-sji"}, headers=admin, timeout=60)
+        check(9, f"GET {ruta} el admin si pide cualquiera", r.status_code == 200,
+              f"HTTP {r.status_code}")
+
+    # Y que acotarse siga significando acotarse: no basta con no dar 403.
+    rows = httpx.get(f"{BASE}/sales", headers=cajero_tecno, timeout=30).json()
+    check(9, "sin parametro, /sales se acota a la sucursal del token",
+          rows and all(s["cafeteria_id"] == "c-tecno" for s in rows),
+          f"{len(rows)} ventas, sucursales={sorted({s['cafeteria_id'] for s in rows})}")
+    stats = httpx.get(f"{BASE}/dashboard/stats", headers=cajero_tecno, timeout=30).json()
+    check(9, "y el tablero no suma el dinero de la otra marca",
+          stats["total_sales_today"] == 888.0, f"ventas_hoy={stats['total_sales_today']}")
+    stats_admin = httpx.get(f"{BASE}/dashboard/stats", headers=admin, timeout=30).json()
+    check(9, "el admin si ve las dos (y por eso el reporte separa por marca)",
+          stats_admin["total_sales_today"] == 1438.0,
+          f"ventas_hoy={stats_admin['total_sales_today']}")
 
     print("\n" + "=" * 70)
     failed = [r for r in results if not r[2]]

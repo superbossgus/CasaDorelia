@@ -48,6 +48,11 @@ import brands
 # Corte de caja: el efectivo no viaja por la API de Clip, asi que el corte que
 # captura la sucursal es la unica fuente de ese dinero (BOS-119).
 import cash_cut
+
+# La sucursal que llega por query se revalida contra el token en un solo lugar
+# (BOS-152). El patron estaba copiado en 13 rutas.
+import branch_scope
+from branch_scope import scoped_cafeteria
 from app_config import cors_origins, jwt_secret
 from branches_init import brand_for
 from business_day import (
@@ -855,6 +860,19 @@ def get_tenant_filter(current_user: dict) -> dict:
         return {"tenant_id": tenant_id}
     # For legacy users without tenant, return empty filter (backwards compatibility)
     return {}
+
+
+def scoped_query(cafeteria_id: Optional[str], current_user: dict,
+                 detail: Optional[str] = None) -> dict:
+    """El alcance de una consulta: cuenta (tenant) + sucursal del token.
+
+    Unico camino para meter un `cafeteria_id` a un filtro. La regla vive en
+    `branch_scope`, que se prueba sin Mongo; aqui solo se le pega el filtro de
+    tenant, para que ninguna ruta pueda aplicar uno sin el otro.
+    """
+    return branch_scope.scoped_query(
+        cafeteria_id, current_user, get_tenant_filter(current_user), detail=detail
+    )
 
 def sales_day_window(start_date: Optional[str], end_date: Optional[str]) -> dict:
     """Ventana de un reporte de ventas, por dia de operacion (UTC-6).
@@ -1901,11 +1919,7 @@ async def delete_ingredient(ingredient_id: str, current_user: dict = Depends(req
 @api_router.get("/ingredient-inventory", response_model=List[IngredientInventoryResponse])
 async def get_ingredient_inventory(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] == UserRole.GERENTE and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    query = scoped_query(cafeteria_id, current_user)
     
     inventory = await db.ingredient_inventory.find(query, {"_id": 0}).to_list(1000)
     
@@ -2010,17 +2024,17 @@ async def record_ingredient_movement(movement: IngredientMovement, current_user:
 @api_router.get("/ingredient-inventory/alerts")
 async def get_ingredient_alerts(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Get ingredients that need restocking based on consumption rate"""
-    query = {}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
+    tenant_filter = get_tenant_filter(current_user)
+    query = scoped_query(cafeteria_id, current_user)
     
     inventory = await db.ingredient_inventory.find(query, {"_id": 0}).to_list(1000)
-    ingredients = {i["id"]: i for i in await db.ingredients.find({}, {"_id": 0}).to_list(1000)}
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     # Calculate consumption
     thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     movements = await db.ingredient_movements.find({
+        **tenant_filter,
         "movement_type": "consumo_venta",
         "created_at": {"$gte": thirty_days_ago}
     }, {"_id": 0}).to_list(10000)
@@ -2488,9 +2502,8 @@ async def export_sales_pdf(
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
     # Build query
-    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
+    query = {**scoped_query(cafeteria_id, current_user),
+             **sales_day_window(start_date, end_date)}
 
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
@@ -2616,9 +2629,8 @@ async def export_sales_excel(
     tenant = await db.tenants.find_one({"id": tenant_id}, {"_id": 0}) if tenant_id else None
     business_name = tenant.get("business_name", "Reporte") if tenant else "Reporte"
     
-    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
+    query = {**scoped_query(cafeteria_id, current_user),
+             **sales_day_window(start_date, end_date)}
 
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0}).to_list(100)}
@@ -2737,9 +2749,13 @@ async def export_products_pdf(
     products = await db.products.find({**tenant_filter, "is_active": True}, {"_id": 0}).to_list(1000)
     categories = {c["id"]: c["name"] for c in await db.categories.find(tenant_filter, {"_id": 0}).to_list(100)}
     
+    # El catalogo es de la cuenta, pero las existencias que lo acompañan son de
+    # una sucursal: van por el mismo alcance que el resto.
     inventory = {}
-    if cafeteria_id:
-        inv_items = await db.inventory.find({"cafeteria_id": cafeteria_id}, {"_id": 0}).to_list(1000)
+    branch = scoped_cafeteria(cafeteria_id, current_user)
+    if branch:
+        inv_items = await db.inventory.find(
+            {**tenant_filter, "cafeteria_id": branch}, {"_id": 0}).to_list(1000)
         inventory = {i["product_id"]: i["quantity"] for i in inv_items}
     
     buffer = io.BytesIO()
@@ -2806,16 +2822,13 @@ async def export_products_pdf(
 
 @api_router.get("/inventory", response_model=List[InventoryItemResponse])
 async def get_inventory(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] == UserRole.GERENTE and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    tenant_filter = get_tenant_filter(current_user)
+    query = scoped_query(cafeteria_id, current_user)
     
     inventory = await db.inventory.find(query, {"_id": 0}).to_list(1000)
     
-    products = {p["id"]: p["name"] for p in await db.products.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)}
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    products = {p["id"]: p["name"] for p in await db.products.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(1000)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     result = []
     for item in inventory:
@@ -2931,16 +2944,13 @@ async def delete_supplier(supplier_id: str, current_user: dict = Depends(require
 
 @api_router.get("/purchases", response_model=List[PurchaseResponse])
 async def get_purchases(cafeteria_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] == UserRole.GERENTE and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    tenant_filter = get_tenant_filter(current_user)
+    query = scoped_query(cafeteria_id, current_user)
     
     purchases = await db.purchases.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     
-    suppliers = {s["id"]: s["name"] for s in await db.suppliers.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
-    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    suppliers = {s["id"]: s["name"] for s in await db.suppliers.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
     
     result = []
     for p in purchases:
@@ -3057,11 +3067,8 @@ async def get_sales(
     current_user: dict = Depends(get_current_user)
 ):
     tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    query = {**scoped_query(cafeteria_id, current_user),
+             **sales_day_window(start_date, end_date)}
 
     sales = await db.sales.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
@@ -3406,11 +3413,8 @@ async def _cash_cut_branch(cafeteria_id: str, current_user: dict) -> dict:
     equivocada: son dos repartos distintos (ver `brands.py`).
     """
     tenant_filter = get_tenant_filter(current_user)
-    if current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO]:
-        own = current_user.get("cafeteria_id")
-        if own and own != cafeteria_id:
-            raise HTTPException(status_code=403,
-                                detail="Solo puedes capturar el corte de tu sucursal")
+    scoped_cafeteria(cafeteria_id, current_user,
+                     detail="Solo puedes capturar el corte de tu sucursal")
 
     cafeteria = await db.cafeterias.find_one(
         {**tenant_filter, "id": cafeteria_id}, {"_id": 0, "id": 1, "name": 1, "brand": 1}
@@ -3464,21 +3468,14 @@ async def get_cash_cuts(
     que es justo lo que esta base no publica.
     """
     tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
-    own = current_user.get("cafeteria_id")
-    if cafeteria_id:
-        # El `cafeteria_id` que llega por query se valida igual que en la
-        # captura (BOS-150). Antes la lista se acotaba sola **solo cuando el
-        # parametro venia vacio**, asi que un cajero de Tecnoparque que pidiera
-        # `?cafeteria_id=c-sji` leia el efectivo de Casa Dorelia, que es otra
-        # marca. `POST /cash-cuts` y `/cash-cuts/prefill` ya contestaban 403 por
-        # `_cash_cut_branch`; este GET no, y es el que trae los montos.
-        if current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and own and own != cafeteria_id:
-            raise HTTPException(status_code=403,
-                                detail="Solo puedes ver los cortes de tu sucursal")
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and own:
-        query["cafeteria_id"] = own
+    # El `cafeteria_id` que llega por query se valida igual que en la captura
+    # (BOS-150). Antes la lista se acotaba sola **solo cuando el parametro venia
+    # vacio**, asi que un cajero de Tecnoparque que pidiera `?cafeteria_id=c-sji`
+    # leia el efectivo de Casa Dorelia, que es otra marca. Y es este GET el que
+    # trae los montos.
+    query = {**scoped_query(cafeteria_id, current_user,
+                            detail="Solo puedes ver los cortes de tu sucursal"),
+             **sales_day_window(start_date, end_date)}
 
     cuts = await db[cash_cut.COLLECTION].find(query, {"_id": 0}).sort(
         [("business_date", -1), ("turno", 1)]).to_list(1000)
@@ -3804,13 +3801,7 @@ async def get_pos_orders(
     current_user: dict = Depends(get_current_user)
 ):
     """Get POS orders for kitchen display or order history"""
-    tenant_filter = get_tenant_filter(current_user)
-    query = {**tenant_filter}
-    
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    query = scoped_query(cafeteria_id, current_user)
     
     if status:
         query["status"] = status
@@ -3829,16 +3820,10 @@ async def get_kitchen_orders(
     current_user: dict = Depends(get_current_user)
 ):
     """Get pending orders for kitchen display"""
-    tenant_filter = get_tenant_filter(current_user)
     query = {
-        **tenant_filter,
+        **scoped_query(cafeteria_id, current_user),
         "status": {"$in": ["pending", "preparing"]}
     }
-    
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
     
     orders = await db.pos_orders.find(query, {"_id": 0}).sort("created_at", 1).to_list(50)
     
@@ -3928,11 +3913,7 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     today = business_day.today()
     month_start = business_day.month_start(today)
 
-    query = {**tenant_filter}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    query = scoped_query(cafeteria_id, current_user)
 
     all_sales = await db.sales.find(query, {"_id": 0}).to_list(10000)
 
@@ -3947,10 +3928,9 @@ async def get_dashboard_stats(cafeteria_id: Optional[str] = None, current_user: 
     total_profit_today = sum(s["profit"] for s in today_sales)
     total_profit_month = sum(s["profit"] for s in month_sales)
     
-    # Product inventory alerts
-    inv_query = {**tenant_filter}
-    if cafeteria_id:
-        inv_query["cafeteria_id"] = cafeteria_id
+    # Product inventory alerts. Mismo alcance que las ventas: si el gerente lee
+    # solo su sucursal, las alertas no pueden ser las de las dos.
+    inv_query = dict(query)
     
     inventory = await db.inventory.find(inv_query, {"_id": 0}).to_list(1000)
     low_stock_alerts = sum(1 for i in inventory if i["quantity"] <= i["min_stock"])
@@ -4062,13 +4042,10 @@ async def get_sales_by_brand(
 
 @api_router.get("/reports/profit-analysis")
 async def get_profit_analysis(cafeteria_id: Optional[str] = None, current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))):
-    tenant_filter = get_tenant_filter(current_user)
     month_start = business_day.month_start()
 
-    # Apply tenant filter
-    scope = {**tenant_filter}
-    if cafeteria_id:
-        scope["cafeteria_id"] = cafeteria_id
+    # Alcance: cuenta + sucursal, revalidando la que llega por query.
+    scope = scoped_query(cafeteria_id, current_user)
 
     # Las ventas cortan por dia de operacion. Las compras no guardan
     # `business_date`, asi que se cortan por el instante UTC en que empieza el
@@ -4101,9 +4078,8 @@ async def get_ingredient_consumption(cafeteria_id: Optional[str] = None, days: i
     tenant_filter = get_tenant_filter(current_user)
     start_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     
-    query = {**tenant_filter, "movement_type": "consumo_venta", "created_at": {"$gte": start_date}}
-    if cafeteria_id:
-        query["cafeteria_id"] = cafeteria_id
+    query = {**scoped_query(cafeteria_id, current_user),
+             "movement_type": "consumo_venta", "created_at": {"$gte": start_date}}
     
     movements = await db.ingredient_movements.find(query, {"_id": 0}).to_list(10000)
     ingredients = {i["id"]: i for i in await db.ingredients.find(tenant_filter, {"_id": 0}).to_list(1000)}

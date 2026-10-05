@@ -3465,10 +3465,20 @@ async def get_cash_cuts(
     """
     tenant_filter = get_tenant_filter(current_user)
     query = {**tenant_filter, **sales_day_window(start_date, end_date)}
+    own = current_user.get("cafeteria_id")
     if cafeteria_id:
+        # El `cafeteria_id` que llega por query se valida igual que en la
+        # captura (BOS-150). Antes la lista se acotaba sola **solo cuando el
+        # parametro venia vacio**, asi que un cajero de Tecnoparque que pidiera
+        # `?cafeteria_id=c-sji` leia el efectivo de Casa Dorelia, que es otra
+        # marca. `POST /cash-cuts` y `/cash-cuts/prefill` ya contestaban 403 por
+        # `_cash_cut_branch`; este GET no, y es el que trae los montos.
+        if current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and own and own != cafeteria_id:
+            raise HTTPException(status_code=403,
+                                detail="Solo puedes ver los cortes de tu sucursal")
         query["cafeteria_id"] = cafeteria_id
-    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
-        query["cafeteria_id"] = current_user["cafeteria_id"]
+    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and own:
+        query["cafeteria_id"] = own
 
     cuts = await db[cash_cut.COLLECTION].find(query, {"_id": 0}).sort(
         [("business_date", -1), ("turno", 1)]).to_list(1000)
@@ -3489,6 +3499,7 @@ async def get_cash_cuts(
 async def get_cash_cut_prefill(
     cafeteria_id: str,
     business_date: Optional[str] = None,
+    turno: Optional[str] = None,
     current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE, UserRole.CAJERO]))
 ):
     """Lo que la pantalla puede proponer antes de contar el cajon.
@@ -3496,28 +3507,48 @@ async def get_cash_cut_prefill(
     Propone **solo** el fondo inicial, y solo porque es el del corte anterior.
     Lo contado y los retiros se cuentan: un default ahi se acepta sin contar, y
     entonces el corte dejaria de medir algo.
+
+    `existing` es el corte **del turno que se esta capturando**, no "algun corte
+    de ese dia" (BOS-150). Lo segundo dejaba a una sucursal de dos turnos sin
+    poder capturar el segundo: la pantalla veia el corte matutino, escondia el
+    formulario, y el efectivo de la tarde no entraba nunca — con el dia ya
+    rotulado como "ya incluye efectivo". El dia completo viaja aparte en
+    `dia`, que es la suma de los turnos capturados.
     """
     tenant_filter = get_tenant_filter(current_user)
     await _cash_cut_branch(cafeteria_id, current_user)
     day = business_day.to_business_date(business_date) or business_day.today()
+    try:
+        turno_value = cash_cut.normalize_turno(turno)
+    except cash_cut.CashCutError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     previous = await db[cash_cut.COLLECTION].find_one(
         {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": {"$lt": day}},
         {"_id": 0}, sort=[("business_date", -1)]
     )
-    existing = await db[cash_cut.COLLECTION].find_one(
+    cuts_today = await db[cash_cut.COLLECTION].find(
         {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": day}, {"_id": 0}
-    )
+    ).sort("turno", 1).to_list(len(cash_cut.TURNOS) + 5)
+    # Si ya hay corte de ESTE turno, la pantalla tiene que ofrecer corregirlo, no
+    # capturar otro: dos cortes del mismo turno duplican la venta del dia.
+    existing = next((c for c in cuts_today if c.get("turno") == turno_value), None)
     sistema_efectivo, sistema_tickets = await _cash_already_in_sales(
         cafeteria_id, day, tenant_filter)
 
     return {
         "business_date": day,
+        "turno": turno_value,
         "turnos": list(cash_cut.TURNOS),
         "prefill": cash_cut.prefill(previous),
-        # Si ya hay corte de ese dia, la pantalla tiene que ofrecer corregirlo,
-        # no capturar otro: dos cortes del mismo turno duplican la venta.
         "existing": existing,
+        # Los turnos que ya se contaron, para que la pantalla no ofrezca
+        # recapturarlos y para que el total del dia sea la suma, no un turno.
+        "turnos_capturados": [c.get("turno") for c in cuts_today],
+        "dia": {
+            "cortes": len(cuts_today),
+            "efectivo": round(sum(float(c.get("ventas_efectivo") or 0.0) for c in cuts_today), 2),
+        },
         "tarjeta": await _card_total(cafeteria_id, day, tenant_filter),
         "sistema_efectivo": sistema_efectivo,
         "sistema_tickets": sistema_tickets,

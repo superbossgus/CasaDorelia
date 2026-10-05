@@ -1,0 +1,19 @@
+{
+  "source": "BOS-147, determinacion de la Jefatura de Sucursal Tecnoparque",
+  "windows": [
+    {
+      "brand": "le-pain-dore",
+      "from": "2026-04-21",
+      "to": "2026-05-10",
+      "label": "sin operacion",
+      "note": "Pausa de 20 dias naturales. Reabrio el lunes 11/05 sin huella de relanzamiento: 70 cobros del 11 al 16/05, cero con centavos y la misma lista de multiplos de $5 de antes del corte."
+    },
+    {
+      "brand": "le-pain-dore",
+      "from": "2026-08-05",
+      "to": "2026-09-20",
+      "label": "sin operacion",
+      "note": "Parada en seco tras un dia normal (mar 4/08, $985.00 en 8 cobros). Reabrio el 21/09 con lista de precios nueva y una promocion de 10% que duro del 21 al 25/09. En los 40 dias de venta del hueco hay cero vales, cuando el anio corre a ~1.3 vales por dia de venta y un vale no se puede pagar en efectivo: no falta venta en efectivo en estos dias."
+    }
+  ]
+}

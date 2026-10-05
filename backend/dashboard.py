@@ -34,6 +34,35 @@ en un comentario:
    la linea se corta (hueco); dentro de su ventana, un dia sin cobro es un cero
    explicito. Un cero de dinero tiene que poder distinguirse de un campo que
    falta: la misma regla que `brands.py` aplica con `sin-marca`.
+5. **No afirma que una sucursal cerrada vendio cero.** Un dia sin cobro dentro de
+   la ventana de la marca es un cero *medido*, y eso es correcto solo si la
+   sucursal estuvo abierta. Si no opero, ese cero es una afirmacion falsa, y se
+   repite una vez por dia: ver `load_cierres`.
+
+### Las ventanas sin operacion
+
+Tecnoparque no cobro del 5/08 al 20/09/2026 (47 dias) ni del 21/04 al 10/05
+(20 dias). Con la regla de arriba sola, el tablero dibujaba **67 ceros medidos**:
+estaba afirmando que la sucursal operaba y vendia $0 dia tras dia. La Jefatura de
+Tecnoparque determino en BOS-147 que no opero, y el dato lo respalda (cero vales
+en los 40 dias de venta del hueco, cuando el año corre a ~1.3 vales por dia de
+venta y un vale no se puede pagar en efectivo).
+
+Esas ventanas **no viven en la plantilla**: viajan en un JSON aparte
+(`--cierres`), igual que el panel de apertura, y `load_cierres` las valida antes
+de dibujarlas. Un dia dentro de una ventana pasa de `0.0` a hueco, y la tabla lo
+nombra con todas sus letras (`sin operacion`), como ya dice `en curso`.
+
+Tres cosas que la ventana **no** puede hacer:
+
+- **No puede esconder dinero.** Si un dia declarado sin operacion trae cobros, el
+  cobro gana: se dibuja su cifra y el dia entra a los controles del dato como
+  contradiccion. Un archivo editado a mano no debe poder borrar venta.
+- **No puede fallar en silencio.** Una ventana cuya marca no existe en la base
+  (un slug mal escrito) no hace nada, que es justo como se deja de notar: tambien
+  entra al control.
+- **No puede solaparse con otra de la misma marca.** Dos ventanas encimadas son
+  la huella de una edicion a medias.
 
 ### El dia en curso y el dia de ayer
 
@@ -79,6 +108,7 @@ republicacion.
     python backend/dashboard.py --db casa_dorelia
     python backend/dashboard.py --db casa_dorelia --out C:/tmp/ventas.html
     python backend/dashboard.py --db casa_dorelia --apertura backend/apertura-sji.json
+    python backend/dashboard.py --db casa_dorelia --cierres backend/cierres-casa-dorelia.json
 
 Solo lee: no escribe una sola linea en Mongo. Necesita `python` del sistema y
 `pymongo`; el resto es biblioteca estandar.
@@ -188,8 +218,9 @@ def _round2(value: float) -> float:
 
 def day_states(*, axis: Sequence[str], last_capture: Mapping[str, int],
                today: str, now_minutes: int,
-               has_sales: Mapping[str, bool]) -> Dict[str, str]:
-    """Estado de cada dia del eje: `en_curso`, `no_confirmado`, `cerrado`, `sin_cobro`.
+               has_sales: Mapping[str, bool],
+               closed_all: Optional[Mapping[str, bool]] = None) -> Dict[str, str]:
+    """Estado de cada dia del eje: `en_curso`, `no_confirmado`, `cerrado`, `sin_cobro`, `sin_operacion`.
 
     `last_capture` trae los minutos locales de la ultima venta de cada dia.
     `now_minutes` son los minutos locales del momento en que se genera, y es lo
@@ -199,10 +230,18 @@ def day_states(*, axis: Sequence[str], last_capture: Mapping[str, int],
     mañana vuelve a pedir el dia anterior completo; si no trajo renglones
     nuevos, el dia quedo cerrado y arrastrar la duda seria sembrar desconfianza
     sobre una cifra ya verificada.
+
+    `closed_all` marca los dias en que **ninguna** marca ya abierta estaba
+    operando (lo calcula `build_model` con las ventanas de `load_cierres`). Esta
+    columna es una sola para todo el eje, asi que solo puede decir "sin
+    operacion" cuando no opero nadie: con una marca cerrada y la otra vendiendo,
+    el renglon sigue siendo el de la marca que vendio y el "sin operacion" va en
+    su celda. Un dia con cobros nunca es `sin_operacion`, por construccion.
     """
     previous = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
     catchup_ran = now_minutes >= _minutes(MORNING_CATCHUP_LOCAL)
     threshold = _minutes(SNAPSHOT_LOCAL) - SNAPSHOT_MARGIN_MINUTES
+    closed_all = closed_all or {}
 
     states: Dict[str, str] = {}
     for day in axis:
@@ -210,7 +249,7 @@ def day_states(*, axis: Sequence[str], last_capture: Mapping[str, int],
             states[day] = "en_curso"
             continue
         if not has_sales.get(day):
-            states[day] = "sin_cobro"
+            states[day] = "sin_operacion" if closed_all.get(day) else "sin_cobro"
             continue
         close = last_capture.get(day)
         hedge = day == previous and not catchup_ran
@@ -322,11 +361,135 @@ def load_apertura_degrading(path: Optional[str]) -> tuple:
         return None, str(exc)
 
 
+def load_cierres(path: str) -> Dict[str, Any]:
+    """Ventanas de **no operacion** por marca, desde un JSON aparte y con controles.
+
+    Un dia sin cobro dentro de la ventana de una marca se dibuja como cero
+    medido, y eso es correcto solo si la sucursal estuvo abierta. Cuando no
+    opero, el cero es una afirmacion falsa repetida una vez por dia: 47 veces en
+    el corte de Tecnoparque del 5/08 al 20/09/2026, 20 mas en el del 21/04 al
+    10/05 (BOS-147). Estas ventanas convierten esos ceros en huecos.
+
+    Viaja en su propio archivo, como `--apertura`, por la misma razon: la
+    determinacion de que una sucursal no opero es un dato operativo con dueño y
+    fecha, no una constante del codigo, y el dia que cambie se edita un JSON de
+    diez renglones en vez de la plantilla.
+
+    Formato:
+
+        {
+          "source": "quien lo determino y en que tarea",
+          "windows": [
+            {"brand": "le-pain-dore", "from": "2026-08-05", "to": "2026-09-20",
+             "label": "sin operacion", "note": "por que, si se sabe"}
+          ]
+        }
+
+    Cuatro controles, porque una ventana escrita a mano puede tapar venta:
+
+    1. `brand`, `from` y `to` son obligatorios. Sin marca la ventana aplicaria a
+       todo el tablero, que es lo contrario de lo que se declaro.
+    2. `from <= to`, y las dos en ISO. Un rango invertido no marca nada y se ve
+       igual que uno que funciona.
+    3. Dos ventanas de la **misma marca** no se pueden solapar: es la huella de
+       una edicion a medias, y un hueco contado dos veces esconde cual de las dos
+       ediciones quedo.
+    4. `label` default `sin operacion`. Es lo que la tabla imprime; el motivo
+       (opcional, `note`) va aparte porque puede llegar despues sin mover fechas.
+
+    El quinto control no puede vivir aqui, porque depende de la venta: una
+    ventana que cubre dias **con** cobro, y una cuya marca no existe en la base.
+    Los dos los detecta `build_model` y los publica como contradiccion.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError as exc:
+        raise DashboardError(f"no existe el archivo de cierres: {path}") from exc
+    except ValueError as exc:
+        raise DashboardError(f"el archivo de cierres no es JSON valido: {exc}") from exc
+
+    if not isinstance(data, Mapping):
+        raise DashboardError("el archivo de cierres no es un objeto JSON")
+    for key in ("source", "windows"):
+        if key not in data:
+            raise DashboardError(f"el archivo de cierres no trae `{key}`")
+
+    raw = data["windows"]
+    if not isinstance(raw, list) or not raw:
+        raise DashboardError("el archivo de cierres no trae ni una sola ventana")
+
+    windows: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise DashboardError(f"la ventana #{index + 1} no es un objeto")
+        for key in ("brand", "from", "to"):
+            if not item.get(key):
+                raise DashboardError(f"la ventana #{index + 1} no trae `{key}`")
+        try:
+            start = date.fromisoformat(str(item["from"]))
+            end = date.fromisoformat(str(item["to"]))
+        except ValueError as exc:
+            raise DashboardError(
+                f"la ventana #{index + 1} trae una fecha ilegible: {exc}") from exc
+        if start > end:
+            raise DashboardError(
+                f"la ventana #{index + 1} esta invertida: {item['from']} > {item['to']}")
+        windows.append({
+            "brand": str(item["brand"]),
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+            "label": str(item.get("label") or "sin operacion"),
+            "note": item.get("note"),
+            # Dias naturales, calculados: un conteo escrito a mano se desfasa en
+            # cuanto alguien mueve un extremo.
+            "days": (end - start).days + 1,
+        })
+
+    windows.sort(key=lambda w: (w["brand"], w["from"]))
+    for previous, current in zip(windows, windows[1:]):
+        if previous["brand"] == current["brand"] and current["from"] <= previous["to"]:
+            raise DashboardError(
+                f"dos ventanas de {current['brand']} se solapan: "
+                f"{previous['from']}..{previous['to']} y {current['from']}..{current['to']}")
+
+    return {"source": str(data["source"]), "windows": windows}
+
+
+def load_cierres_degrading(path: Optional[str]) -> tuple:
+    """`load_cierres` que devuelve su falla en vez de levantarla.
+
+    Misma forma y misma razon que `load_apertura_degrading`: en el republicado
+    automatico (BOS-144) tumbar el tablero por un JSON mal editado dejaria
+    publicada la venta de ayer. Aqui el costo de degradar es mas alto que alla
+    —sin ventanas el tablero vuelve a dibujar los ceros falsos—, asi que la razon
+    viaja en el modelo y la pagina la publica junto a los ceros que la ventana
+    iba a tapar. A mano sigue tronando: quien corre el comando a proposito quiere
+    enterarse.
+    """
+    if not path:
+        return None, None
+    try:
+        return load_cierres(path), None
+    except DashboardError as exc:
+        return None, str(exc)
+
+
+def _in_windows(day: str, windows: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """La ventana que cubre ese dia, o `None`. Las fechas ISO comparan como texto."""
+    for window in windows:
+        if window["from"] <= day <= window["to"]:
+            return window
+    return None
+
+
 def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 today: Optional[str] = None, now: Optional[datetime] = None,
                 db_name: Optional[str] = None,
                 apertura: Optional[Mapping[str, Any]] = None,
-                apertura_error: Optional[str] = None) -> Dict[str, Any]:
+                apertura_error: Optional[str] = None,
+                cierres: Optional[Mapping[str, Any]] = None,
+                cierres_error: Optional[str] = None) -> Dict[str, Any]:
     """Arma el modelo completo del tablero. Pura: recibe documentos, no una conexion.
 
     Devuelve ya listo lo que la pagina dibuja, incluida la lista de limites del
@@ -346,6 +509,13 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
     viene a cerrar. Asi que ahi el panel se cae solo y su razon viaja en el
     modelo, para que la tarjeta diga por que falta en lugar de desaparecer sin
     ruido. Un panel ausente y callado se lee como "ya no falta nada".
+
+    `cierres` son las ventanas de no operacion por marca (ver `load_cierres`).
+    Dentro de una ventana, un dia sin cobro deja de ser un cero medido y pasa a
+    hueco. Lo que **no** hace es tapar venta: si el dia trae cobros gana el
+    cobro, y el dia entra a los controles del dato como contradiccion. Igual una
+    ventana cuya marca no aparece en la base — un slug mal escrito no hace nada,
+    y "no hacer nada en silencio" es como se deja de notar que la ventana murio.
     """
     rows = list(sales)
     now = now or datetime.now(timezone.utc)
@@ -435,16 +605,45 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
 
     days_with_data = sorted(has_sales)
     axis = _day_axis(days_with_data[0], max(days_with_data[-1], today))
-    states = day_states(axis=axis, last_capture=last_capture, today=today,
-                        now_minutes=now_local.hour * 60 + now_local.minute,
-                        has_sales=has_sales)
 
     brand_slugs = sorted(per_day)
+    first_days = {slug: min(per_day[slug]) for slug in brand_slugs}
+
+    # Ventanas de no operacion, repartidas por marca. Una ventana cuya marca no
+    # aparece en la base no se descarta en silencio: se cuenta, porque un slug
+    # mal escrito deja de tapar los ceros falsos sin que nadie se entere.
+    all_windows = list((cierres or {}).get("windows") or [])
+    windows_by_brand: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    unknown_windows: List[Dict[str, Any]] = []
+    for window in all_windows:
+        if window["brand"] in per_day:
+            windows_by_brand[window["brand"]].append(window)
+        else:
+            unknown_windows.append(dict(window))
+
+    # Dias en que **ninguna** marca ya abierta estaba operando. Es lo unico que
+    # la columna de estado (una sola para todo el eje) puede llamar "sin
+    # operacion" sin mentir sobre la otra marca.
+    closed_all: Dict[str, bool] = {}
+    for day in axis:
+        open_brands = [s for s in brand_slugs if first_days[s] <= day]
+        closed_all[day] = bool(open_brands) and all(
+            _in_windows(day, windows_by_brand[s]) for s in open_brands)
+
+    states = day_states(axis=axis, last_capture=last_capture, today=today,
+                        now_minutes=now_local.hour * 60 + now_local.minute,
+                        has_sales=has_sales, closed_all=closed_all)
+
+    # Dias declarados sin operacion que si traen cobro. El cobro gana —este
+    # tablero no puede borrar venta con un archivo de configuracion— y la
+    # contradiccion sale a los controles del dato.
+    conflicts: List[Dict[str, Any]] = []
     brand_models: List[Dict[str, Any]] = []
     for index, slug in enumerate(brand_slugs):
         day_rows = per_day[slug]
         active = sorted(day_rows)
         first_day, last_day = active[0], active[-1]
+        brand_windows = windows_by_brand[slug]
 
         series: List[Dict[str, Any]] = []
         for day in axis:
@@ -454,6 +653,21 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                                "avg_ticket": None})
                 continue
             bucket = day_rows.get(day)
+            closed = _in_windows(day, brand_windows) if day < today else None
+            if bucket is None and closed is not None:
+                # Declarado sin operacion: hueco rotulado, no un cero medido.
+                # `closed` viaja en el punto para que la celda pueda decir por
+                # que falta; un hueco callado se lee como "no hay dato todavia".
+                series.append({"date": day, "gross": None, "tickets": None,
+                               "avg_ticket": None, "closed": closed["label"]})
+                continue
+            if bucket is not None and closed is not None:
+                conflicts.append({
+                    "brand": slug, "date": day,
+                    "tickets": int(bucket["tickets"]),
+                    "gross": _round2(bucket["gross"]),
+                    "window": f"{closed['from']}..{closed['to']}",
+                })
             if bucket is None:
                 # El dia en curso sin cobro todavia **no es un cero medido**: es
                 # un dia que no ha pasado. Graficarlo en cero desploma la linea
@@ -505,6 +719,9 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                          "tickets": int(per_method[slug][method]["tickets"])}
                 for method in sorted(per_method[slug])
             },
+            # Las ventanas declaradas de ESTA marca. Van en su renglon, no en un
+            # campo global, porque una sucursal cerrada no cierra a la otra.
+            "no_operacion": [dict(w) for w in brand_windows],
         })
 
     checks = [
@@ -518,6 +735,15 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
          "fix": "la API de Clip no entrega costo: debe quedar en cero"},
         {"id": "undated", "label": "Ventas sin dia de operacion", "count": undated,
          "fix": "python backend/backfill_business_date.py"},
+        # Las dos formas en que una ventana de no operacion puede estar mal, y
+        # ninguna de las dos se ve en la grafica: un dia declarado cerrado que si
+        # cobro (la ventana estaria tapando venta, asi que no se aplica) y una
+        # ventana cuya marca no existe en la base (no tapa nada, en silencio).
+        {"id": "cierres",
+         "label": "Ventanas sin operacion que el dato contradice",
+         "count": len(conflicts) + len(unknown_windows),
+         "fix": "revisar las fechas y los slugs del archivo de --cierres contra "
+                "la base: el cobro siempre gana"},
     ]
     for check in checks:
         check["status"] = "good" if check["count"] == 0 else "critical"
@@ -544,6 +770,16 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         # pidio. `None` en los dos campos = nadie pidio panel; `apertura_error`
         # con `apertura` nulo = se pidio y se cayo, y la tarjeta lo dice.
         "apertura_error": apertura_error if apertura is None else None,
+        # Las ventanas de no operacion, con su fuente y con lo que el dato les
+        # contradice. La fuente va en el modelo porque un hueco rotulado sin
+        # dueño es indistinguible de un hueco inventado.
+        "cierres": {
+            "source": (cierres or {}).get("source"),
+            "windows": [dict(w) for w in all_windows],
+            "conflicts": conflicts,
+            "unknown_brands": unknown_windows,
+        } if cierres else None,
+        "cierres_error": cierres_error if cierres is None else None,
         "quality": {"checks": checks},
         "limits": {
             # Calculados, no escritos a mano: el dia que el dato cambie, el
@@ -636,6 +872,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="si el panel de apertura no cuadra, publicar el tablero "
                              "sin panel (y con la razon a la vista) en vez de fallar; "
                              "es lo que usa el republicado automatico")
+    parser.add_argument("--cierres", default=None, metavar="ARCHIVO.json",
+                        help="ventanas de no operacion por marca (ver load_cierres); "
+                             "sin esto, un dia pasado sin cobro dentro de la ventana "
+                             "de la marca se dibuja como cero medido")
+    parser.add_argument("--cierres-optional", action="store_true",
+                        help="si el archivo de cierres no cuadra, publicar el tablero "
+                             "sin ventanas (y con la razon a la vista) en vez de fallar")
     parser.add_argument("--json", action="store_true",
                         help="imprime el modelo en JSON en vez de escribir el HTML")
 
@@ -647,16 +890,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             apertura = load_apertura(args.apertura) if args.apertura else None
             apertura_error = None
+        if args.cierres_optional:
+            cierres, cierres_error = load_cierres_degrading(args.cierres)
+        else:
+            cierres = load_cierres(args.cierres) if args.cierres else None
+            cierres_error = None
         sales = open_sales_collection(args.mongo_url, args.db)
         db_name = args.db or os.environ.get("DB_NAME")
         model = build_model(sales.find({}, {"_id": 0}), title=args.title,
                             db_name=db_name, apertura=apertura,
-                            apertura_error=apertura_error)
+                            apertura_error=apertura_error, cierres=cierres,
+                            cierres_error=cierres_error)
     except DashboardError as exc:
         print(f"ERROR: {exc}")
         return 1
     if apertura_error:
         print(f"AVISO panel de apertura omitido: {apertura_error}")
+    if cierres_error:
+        print(f"AVISO ventanas sin operacion omitidas: {cierres_error}")
 
     if args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -677,6 +928,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if model["limits"]["cash_excluded"]:
         print("  Piso, no venta del dia: el efectivo de la app de Clip no viaja "
               "por esta API.")
+    cierres_model = model.get("cierres")
+    if cierres_model:
+        for window in cierres_model["windows"]:
+            print(f"  {window['label']}: {window['brand']} {window['from']} "
+                  f"-> {window['to']} ({window['days']} dias, hueco)")
+        for conflict in cierres_model["conflicts"]:
+            print(f"  AVISO el {conflict['date']} esta declarado sin operacion "
+                  f"({conflict['window']}) pero {conflict['brand']} trae "
+                  f"{conflict['tickets']} cobro(s) por ${conflict['gross']:,.2f}: "
+                  "se dibuja el cobro, no el hueco")
+        for window in cierres_model["unknown_brands"]:
+            print(f"  AVISO la ventana {window['from']}..{window['to']} es de "
+                  f"`{window['brand']}`, que no existe en esta base: no tapa nada")
 
     failed = [c for c in model["quality"]["checks"] if c["count"]]
     for check in failed:
@@ -956,8 +1220,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
   <section class="card">
     <h2>Controles del dato</h2>
-    <p class="hint">Se cuentan sobre toda la base en cada generacion, no sobre el
-      rango filtrado. Los cinco deben estar en cero.</p>
+    <p class="hint" id="checks-hint"></p>
     <div class="checks" id="checks"></div>
   </section>
 
@@ -1008,7 +1271,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
     cerrado:       { ico: "\u25CF", text: "cerrado" },
     no_confirmado: { ico: "\u25D0", text: "cierre no confirmado" },
     en_curso:      { ico: "\u25CB", text: "en curso" },
-    sin_cobro:     { ico: "\u2014", text: "sin cobro con tarjeta" }
+    sin_cobro:     { ico: "\u2014", text: "sin cobro con tarjeta" },
+    // Declarado sin operacion: no es un cero medido ni un dato que falta, es un
+    // dia en que la sucursal no abrio. Glifo propio porque los otros cuatro ya
+    // significan otra cosa.
+    sin_operacion: { ico: "\u2298", text: "sin operacion" }
   };
 
   function el(tag, cls, text) {
@@ -1060,7 +1327,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     var byDay = {};
     brand.series.forEach(function (p) { byDay[p.date] = p; });
     return days.map(function (d) {
-      return byDay[d] || { date: d, gross: null, tickets: null, avg_ticket: null };
+      return byDay[d] ||
+        { date: d, gross: null, tickets: null, avg_ticket: null, closed: null };
     });
   }
 
@@ -1216,8 +1484,10 @@ _TEMPLATE = r"""<!DOCTYPE html>
         k.style.background = s.color;
         row.appendChild(k);
         row.appendChild(el("span", null, s.name));
-        row.appendChild(el("span", "num", p.value === null ? "sin dato"
-          : opts.valueFormat(p.value)));
+        // Un hueco declarado dice por que esta vacio. "sin dato" sobre un cierre
+        // conocido invita a suponer que la carga fallo.
+        row.appendChild(el("span", "num", p.value !== null ? opts.valueFormat(p.value)
+          : (p.closed || "sin dato")));
         tip.appendChild(row);
         if (p.value !== null) {
           dots.appendChild(svgEl("circle", {
@@ -1499,7 +1769,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
       null,
       "Bruto con tarjeta y numero de cobros por dia de operacion (UTC-6). " +
       "«0» es un dia que paso sin cobro con tarjeta; «—» es que no hay dato " +
-      "(la marca no operaba aun, o el dia todavia no pasa).");
+      "(la marca no operaba aun, o el dia todavia no pasa); «sin operacion» es " +
+      "un dia declarado cerrado, que no es lo mismo que un cero.");
     table.appendChild(cap);
 
     var thead = el("thead");
@@ -1530,8 +1801,12 @@ _TEMPLATE = r"""<!DOCTYPE html>
       var running = M.day_states[day] === "en_curso";
       sliced.forEach(function (pts) {
         var p = pts[idx];
+        // Tres huecos distintos en la misma celda, y cada uno dice cual es: el
+        // dia que no ha pasado, el cierre declarado, y el "no hay dato" de antes
+        // de que la marca existiera. Un «—» para los tres los hace iguales.
+        var hueco = p.closed ? p.closed : (running ? "aun sin cobro" : null);
         var c1 = el("td", p.gross === null ? "nodata" : null,
-          p.gross === null && running ? "aun sin cobro" : money(p.gross));
+          p.gross === null && hueco ? hueco : money(p.gross));
         tr.appendChild(c1);
         tr.appendChild(el("td", p.tickets === null ? "nodata" : null,
           p.tickets === null ? "—" : NUM.format(p.tickets)));
@@ -1657,6 +1932,12 @@ _TEMPLATE = r"""<!DOCTYPE html>
   function renderChecks() {
     var host = document.getElementById("checks");
     host.textContent = "";
+    // El conteo se cuenta, no se escribe: decia "los cinco" y el dia que entro
+    // un sexto control el rotulo se quedo mintiendo sobre su propia lista.
+    document.getElementById("checks-hint").textContent =
+      "Se cuentan sobre toda la base en cada generacion, no sobre el rango " +
+      "filtrado. Los " + NUM.format(M.quality.checks.length) +
+      " deben estar en cero.";
     M.quality.checks.forEach(function (c) {
       var row = el("div", "check");
       var ok = c.count === 0;
@@ -1732,6 +2013,45 @@ _TEMPLATE = r"""<!DOCTYPE html>
       M.config.snapshot_local + " CDMX. A la primera las sucursales no han abierto, " +
       "asi que un cero de la mañana es correcto, no una carga caida."]);
 
+    // Los huecos declarados se rotulan con su fuente. Un hueco sin dueño no se
+    // puede distinguir de un hueco inventado, y este es el unico limite del
+    // tablero que no sale del dato sino de una determinacion operativa.
+    var C = M.cierres;
+    if (C && C.windows.length) {
+      var spans = C.windows.map(function (w) {
+        var b = M.brands.filter(function (x) { return x.brand === w.brand; })[0];
+        return (b ? b.name : w.brand) + " " + shortDay(w.from) + " a " +
+          shortDay(w.to) + " (" + NUM.format(w.days) + " dias)";
+      }).join("; ");
+      items.push(["Los dias sin operacion no son ceros, y no salen del dato. ",
+        spans + ". Esos dias se dibujan como hueco por determinacion operativa (" +
+        C.source + "), no porque la carga no haya traido nada: sin ese rotulo el " +
+        "tablero afirmaria que la sucursal abrio y vendio $0 una vez por dia. Lo " +
+        "que si sale del dato es que no falta efectivo ahi."]);
+      if (C.conflicts.length) {
+        items.push(["Una ventana declarada no cuadra con la venta. ",
+          C.conflicts.map(function (c) {
+            var b = M.brands.filter(function (x) { return x.brand === c.brand; })[0];
+            return shortDay(c.date) + ": " + (b ? b.name : c.brand) + " cobro " +
+              money(c.gross) + " en " + NUM.format(c.tickets) + " cobro(s) dentro de " +
+              c.window;
+          }).join("; ") + ". Se dibuja el cobro, no el hueco: un archivo de " +
+          "configuracion no puede borrar venta. Hay que corregir las fechas."]);
+      }
+      if (C.unknown_brands.length) {
+        items.push(["Una ventana declarada no tapa nada. ",
+          C.unknown_brands.map(function (w) {
+            return w.brand + " " + w.from + ".." + w.to;
+          }).join("; ") + ": esa marca no existe en esta base, asi que la ventana " +
+          "no se aplico. Casi siempre es un slug mal escrito."]);
+      }
+    } else if (M.cierres_error) {
+      items.push(["Las ventanas sin operacion no se pudieron leer. ",
+        "Los dias cerrados de abajo estan dibujados como ceros medidos, o sea " +
+        "que el tablero esta afirmando que la sucursal abrio y vendio $0 en cada " +
+        "uno. Falta por esto: " + M.cierres_error]);
+    }
+
     items.forEach(function (pair) {
       var li = el("li");
       li.appendChild(el("b", null, pair[0]));
@@ -1799,9 +2119,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
     hint.textContent = "Dia de operacion en hora del negocio (UTC-6), no dia UTC: " +
       "una venta de las 18:00 locales cae en el dia UTC siguiente. " +
       "La linea baja a cero en un dia que paso sin cobro, y se corta donde no hay " +
-      "dato: antes del primer dia de la marca, y en el dia en curso mientras no " +
-      "entre el primer cobro. Ese hueco de hoy no es una caida, es un dia que no " +
-      "ha pasado; la tabla lo marca «en curso».";
+      "dato: antes del primer dia de la marca, en el dia en curso mientras no " +
+      "entre el primer cobro, y en los dias declarados sin operacion. Ninguno de " +
+      "esos huecos es una caida de venta; la tabla dice cual es cada uno («en " +
+      "curso», «sin operacion»)." +
+      (M.cierres && M.cierres.windows.length
+        ? " Las ventanas sin operacion vienen de " + M.cierres.source + "."
+        : "");
   }
 
   function renderAll() {
@@ -1814,7 +2138,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
       return {
         name: b.name, color: hueOf(b),
         points: sliceSeries(b, days).map(function (p) {
-          return { date: p.date, value: p.gross };
+          return { date: p.date, value: p.gross, closed: p.closed || null };
         })
       };
     });
@@ -1830,7 +2154,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
       return {
         name: b.name, color: hueOf(b),
         points: sliceSeries(b, days).map(function (p) {
-          return { date: p.date, value: p.avg_ticket };
+          return { date: p.date, value: p.avg_ticket, closed: p.closed || null };
         })
       };
     });

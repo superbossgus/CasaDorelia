@@ -53,6 +53,7 @@ dice por que falta.
     # despues de la carga, en la rutina
     python backend/publish_dashboard.py --db casa_dorelia \
         --apertura backend/apertura-sji.json \
+        --cierres backend/cierres-casa-dorelia.json \
         --issue d79395ba-11be-4c90-a607-db79c74c639e \
         --work-product 853436f7-9720-4a68-8dfa-ddc8c4cfcdf6
 
@@ -63,11 +64,20 @@ Necesita `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` y `PAPERCLIP_COMPANY_ID` en el
 entorno (los inyecta el run). Fuera de la biblioteca estandar solo depende de
 `pymongo`, via `dashboard.py`.
 
+### Las ventanas sin operacion, cuando no se pueden leer
+
+Mismo trato que el panel, con un matiz: degradar cuesta mas. Sin las ventanas de
+`load_cierres`, los dias en que una sucursal no opero vuelven a dibujarse como
+ceros medidos, o sea que el tablero afirma que abrio y vendio $0 — 67 veces en el
+caso de Tecnoparque. Asi que la razon no se queda en la consola: viaja en el
+modelo (`cierres_error`) y la pagina la publica junto a los ceros que la ventana
+iba a rotular.
+
 ### Reutilizable para otra empresa del grupo
 
-Nada aqui conoce a Casa Dorelia: la base, el panel, la tarea y el work product
-son argumentos. Cualquier tablero generado del grupo se republica con este mismo
-comando cambiando los cuatro.
+Nada aqui conoce a Casa Dorelia: la base, el panel, las ventanas, la tarea y el
+work product son argumentos. Cualquier tablero generado del grupo se republica
+con este mismo comando cambiando los cinco.
 """
 from __future__ import annotations
 
@@ -216,13 +226,20 @@ def repoint_work_product(work_product_id: str, *, attachment_id: str,
 # --------------------------------------------------------------------------
 
 def generate(*, out: str, db: Optional[str], mongo_url: Optional[str],
-             apertura_path: Optional[str], title: str) -> Dict[str, Any]:
+             apertura_path: Optional[str], title: str,
+             cierres_path: Optional[str] = None) -> Dict[str, Any]:
     """Escribe el HTML y devuelve el modelo con el que se escribio."""
     apertura, apertura_error = dashboard.load_apertura_degrading(apertura_path)
+    # Mismo trato que el panel: un JSON mal editado no tumba la republicacion,
+    # porque eso dejaria publicada la venta de ayer. La diferencia es que aqui
+    # degradar cuesta mas —vuelven los ceros falsos—, asi que la razon se dibuja
+    # junto a los dias que la ventana iba a rotular, no solo en la consola.
+    cierres, cierres_error = dashboard.load_cierres_degrading(cierres_path)
     sales = dashboard.open_sales_collection(mongo_url, db)
     model = dashboard.build_model(sales.find({}, {"_id": 0}), title=title,
                                   db_name=db or os.environ.get("DB_NAME"),
-                                  apertura=apertura, apertura_error=apertura_error)
+                                  apertura=apertura, apertura_error=apertura_error,
+                                  cierres=cierres, cierres_error=cierres_error)
     target = os.path.abspath(out)
     with open(target, "w", encoding="utf-8") as handle:
         handle.write(dashboard.render_html(model))
@@ -248,6 +265,18 @@ def summarize(model: Mapping[str, Any]) -> str:
     ]
     if model.get("apertura_error"):
         partes.append(f"panel de apertura omitido ({model['apertura_error']})")
+    cierres = model.get("cierres")
+    if cierres and cierres["windows"]:
+        # Los dias que NO son venta de cero van en el chip: el resumen se lee sin
+        # abrir el archivo, y "67 dias en hueco" cambia como se lee el total.
+        dias = sum(int(w["days"]) for w in cierres["windows"])
+        partes.append(f"{len(cierres['windows'])} ventana(s) sin operacion "
+                      f"({dias} dias) dibujadas como hueco")
+        if cierres["conflicts"]:
+            partes.append(f"{len(cierres['conflicts'])} dia(s) declarados sin "
+                          "operacion que si cobraron: se dibujo el cobro")
+    elif model.get("cierres_error"):
+        partes.append(f"ventanas sin operacion omitidas ({model['cierres_error']})")
     return ". ".join(partes) + "."
 
 
@@ -272,6 +301,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--apertura", default=None, metavar="ARCHIVO.json",
                         help="panel de pendientes de apertura; si no cuadra, el "
                              "tablero se publica sin panel y con la razon a la vista")
+    parser.add_argument("--cierres", default=None, metavar="ARCHIVO.json",
+                        help="ventanas de no operacion por marca; si no cuadra, el "
+                             "tablero se publica sin ventanas y con la razon a la "
+                             "vista. Sin esto, los dias cerrados se dibujan como "
+                             "ceros medidos")
     parser.add_argument("--issue", default=None,
                         help="tarea donde se sube el adjunto (default: $PAPERCLIP_TASK_ID)")
     parser.add_argument("--work-product", default=None, metavar="ID",
@@ -285,7 +319,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         model = generate(out=args.out, db=args.db, mongo_url=args.mongo_url,
-                         apertura_path=args.apertura, title=args.title)
+                         apertura_path=args.apertura, title=args.title,
+                         cierres_path=args.cierres)
     except dashboard.DashboardError as exc:
         print(f"ERROR al generar el tablero: {exc}")
         return 1
@@ -298,6 +333,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f" en {brand['totals']['tickets']} cobros")
     if model.get("apertura_error"):
         print(f"  AVISO panel de apertura omitido: {model['apertura_error']}")
+    if model.get("cierres_error"):
+        print(f"  AVISO ventanas sin operacion omitidas: {model['cierres_error']}"
+              "\n        los dias cerrados se publicaron como ceros medidos")
+    cierres = model.get("cierres")
+    if cierres:
+        for window in cierres["windows"]:
+            print(f"  {window['label']}: {window['brand']} {window['from']} -> "
+                  f"{window['to']} ({window['days']} dias, hueco)")
+        for conflict in cierres["conflicts"]:
+            print(f"  AVISO el {conflict['date']} esta declarado sin operacion "
+                  f"pero {conflict['brand']} cobro ${conflict['gross']:,.2f}")
+        for window in cierres["unknown_brands"]:
+            print(f"  AVISO la ventana de `{window['brand']}` no aplica: esa "
+                  "marca no existe en esta base")
 
     if args.dry_run:
         print("\n(en seco: no se subio ni se repunto nada)")

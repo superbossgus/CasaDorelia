@@ -245,9 +245,15 @@ mantiene al dia es este comando, que corre despues de cada carga de Clip:
 ```
 python backend/publish_dashboard.py --db casa_dorelia \
     --apertura backend/apertura-sji.json \
+    --cierres backend/cierres-casa-dorelia.json \
     --issue d79395ba-11be-4c90-a607-db79c74c639e \
     --work-product 853436f7-9720-4a68-8dfa-ddc8c4cfcdf6
 ```
+
+**`--cierres` no es opcional de facto.** Sin ese archivo, los dias en que una
+sucursal no opero se dibujan como ceros *medidos*, o sea que el tablero afirma
+que abrio y vendio $0 — 67 veces en el caso de Tecnoparque. Ver la seccion
+*Dias sin operacion* abajo.
 
 Tres pasos: regenera el HTML, lo sube como adjunto, y **repunta el work product
 al adjunto nuevo**. El tercero es el que importa. Sin el, cada corrida deja un
@@ -281,6 +287,65 @@ corre `dashboard.py` a proposito quiere enterarse del desfase, y para el otro
 comportamiento esta `--apertura-optional`.
 
 Para ver que saldria sin publicar nada: `--dry-run`.
+
+## Dias sin operacion (por que un cero no siempre es un cero)
+
+La regla base del tablero es: antes del primer dia de una marca no hay dato
+(hueco); **dentro** de su ventana, un dia pasado sin cobro es un cero medido. Esa
+segunda mitad solo es verdadera si la sucursal estuvo abierta. Tecnoparque no
+cobro del **5/08 al 20/09/2026** (47 dias) ni del **21/04 al 10/05** (20 dias), y
+con la regla base sola el tablero publicaba 67 ceros: estaba afirmando, una vez
+por dia, que la sucursal abrio y no vendio nada.
+
+Esas ventanas viven en `backend/cierres-casa-dorelia.json`, no en el codigo ni en
+la plantilla, porque "esta sucursal no opero" es un dato operativo con dueño y
+fecha (la determinacion es de la Jefatura de Tecnoparque, BOS-147). `load_cierres`
+lo valida antes de dibujarlo: marca y fechas obligatorias, `from <= to`, y dos
+ventanas de la misma marca no se pueden solapar.
+
+Tres cosas que una ventana **no** puede hacer, y las tres estan en codigo, no en
+este documento:
+
+1. **No puede esconder dinero.** Si un dia declarado sin operacion trae cobros,
+   gana el cobro: se dibuja su cifra y el dia sale en el control
+   *«Ventanas sin operacion que el dato contradice»*. Un archivo editado a mano
+   no debe poder borrar venta.
+2. **No puede fallar en silencio.** Una ventana con el slug de marca mal escrito
+   no tapa nada — y "no hacer nada" es como se deja de notar. Entra al mismo
+   control.
+3. **No cierra a la otra marca.** La columna de estado del eje solo dice
+   *«sin operacion»* cuando no opero ninguna marca abierta; con una cerrada y la
+   otra vendiendo, el rotulo va en la celda de la cerrada.
+
+Si el archivo no se puede leer, el republicado **no** se cae (misma razon que el
+panel de apertura) pero la pagina publica la causa junto a los ceros que la
+ventana iba a rotular. A mano sigue tronando; `--cierres-optional` es el otro
+comportamiento.
+
+Para que el rotulo cambie de texto (cuando se sepa el motivo del cierre) se edita
+`label`/`note` del JSON. Las fechas no se tocan: son la determinacion.
+
+## Pruebas de terminal (no son venta)
+
+Un cobro de prueba de terminal entra de Clip como cobrado, porque lo fue: alguien
+paso una tarjeta propia para ver si la terminal funcionaba. Ninguna consulta lo
+distingue de una venta, asi que no hay nada que automatizar: se decide por
+renglon y se borra por `dedup_key`.
+
+```
+python backend/purge_test_charges.py --db casa_dorelia --key clip:PFsJEAov
+python backend/purge_test_charges.py --db casa_dorelia --key clip:PFsJEAov --commit
+```
+
+Imprime el renglon completo antes de borrarlo (incluido `notes`, que es donde
+Clip deja los ultimos cuatro de la tarjeta). Dos topes: **rechaza** cualquier
+renglon de `--max-total` o mas (default $50, porque una prueba no cuesta eso) y
+**reporta** cualquier llave que no encuentre, porque "ya se purgo" y "esta mal
+escrita" se ven igual y las dos necesitan que alguien mire.
+
+El efecto de dejar una prueba no es el monto: el $0.01 del 26/08 partia el hueco
+de 47 dias de Tecnoparque en dos (21 + 25) y pintaba ese dia como un dia con
+venta de un centavo. Borrado en BOS-148.
 
 ## Corte del dia (solo lectura, no escribe)
 

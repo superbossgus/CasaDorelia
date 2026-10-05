@@ -540,3 +540,272 @@ def test_la_pagina_lleva_lo_necesario_para_calcular_su_edad_sola():
     # Y el aviso nace oculto: un tablero recien generado no se acusa de viejo.
     assert 'id="stale-note" hidden' in html
     assert "stale_after_hours" in html
+
+
+# --------------------------------------------------------------------------
+# 8. Una sucursal cerrada no vendio cero (BOS-147, BOS-148)
+# --------------------------------------------------------------------------
+#
+# Un dia sin cobro dentro de la ventana de la marca es un cero *medido*, y eso
+# solo es correcto si la sucursal estuvo abierta. Tecnoparque no cobro del 5/08
+# al 20/09/2026 ni del 21/04 al 10/05, asi que el tablero estaba afirmando que
+# abrio y vendio $0 — 67 veces, una por dia. Estas pruebas cuidan que la ventana
+# convierta esos ceros en huecos **y** que no pueda hacer tres cosas: tapar
+# venta, morirse en silencio, y solaparse consigo misma.
+
+CIERRES = {
+    "source": "BOS-147, Jefatura de Tecnoparque",
+    "windows": [{"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30",
+                 "note": "no opero"}],
+}
+
+
+def cierres_file(tmp_path, data=None, name="cierres.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(data if data is not None else CIERRES),
+                    encoding="utf-8")
+    return str(path)
+
+
+def con_cierres(rows, windows, *, today="2026-10-04", source="prueba"):
+    from datetime import datetime, timezone
+
+    from business_day import BUSINESS_TZ
+
+    now = datetime.fromisoformat(today + "T00:00:00").replace(
+        hour=12, tzinfo=BUSINESS_TZ).astimezone(timezone.utc)
+    cierres = {"source": source, "windows": [
+        {"label": "sin operacion", "note": None,
+         "days": 1, **w} for w in windows]}
+    return build_model(rows, title="t", today=today, now=now,
+                       db_name="prueba", cierres=cierres)
+
+
+def test_un_dia_declarado_sin_operacion_es_hueco_no_un_cero_medido():
+    m = con_cierres(
+        [sale("2026-09-27", 500.0, brand="le-pain-dore"),
+         sale("2026-10-01", 300.0, brand="le-pain-dore")],
+        [{"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30"}])
+
+    lp = series_of(m, "le-pain-dore")
+    # Los tres dias del cierre: hueco con rotulo, no un cero que se grafica como
+    # derrumbe y se lee como "abrio y no vendio nada".
+    for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
+        assert lp[day]["gross"] is None, day
+        assert lp[day]["tickets"] is None, day
+        assert lp[day]["closed"] == "sin operacion", day
+    # El dia de antes y el de despues no se tocan.
+    assert lp["2026-09-27"]["gross"] == 500.0
+    assert lp["2026-10-01"]["gross"] == 300.0
+    # Y el estado del eje lo dice con todas sus letras, como ya decia "en curso".
+    assert m["day_states"]["2026-09-29"] == "sin_operacion"
+
+
+def test_la_ventana_no_puede_tapar_un_dia_que_si_cobro():
+    """El cobro gana. Un archivo de configuracion no puede borrar venta.
+
+    Es el control que importa: si alguien se equivoca de fechas, lo caro no es
+    que falte el rotulo, es que desaparezcan pesos del tablero sin dejar rastro.
+    """
+    m = con_cierres(
+        [sale("2026-09-27", 500.0, brand="le-pain-dore"),
+         sale("2026-09-29", 120.0, brand="le-pain-dore")],
+        [{"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30"}])
+
+    lp = series_of(m, "le-pain-dore")
+    assert lp["2026-09-29"]["gross"] == 120.0          # el cobro se dibuja
+    assert "closed" not in lp["2026-09-29"]
+    assert lp["2026-09-28"]["gross"] is None           # el resto sigue en hueco
+    # ...y la contradiccion no se queda callada: sale en los controles del dato.
+    conflicts = m["cierres"]["conflicts"]
+    assert [c["date"] for c in conflicts] == ["2026-09-29"]
+    assert conflicts[0]["gross"] == 120.0
+    checks = {c["id"]: c for c in m["quality"]["checks"]}
+    assert checks["cierres"]["count"] == 1
+    assert checks["cierres"]["status"] == "critical"
+    # El dia tiene cobro, asi que el eje no puede llamarlo sin operacion.
+    assert m["day_states"]["2026-09-29"] == "cerrado"
+
+
+def test_una_ventana_con_la_marca_mal_escrita_no_se_muere_en_silencio():
+    # Un slug equivocado no tapa nada, y "no hacer nada" es exactamente como se
+    # deja de notar que la ventana dejo de servir.
+    m = con_cierres([sale("2026-10-01", 300.0, brand="le-pain-dore")],
+                    [{"brand": "le-pain-doree", "from": "2026-09-28",
+                      "to": "2026-09-30"}])
+
+    assert [w["brand"] for w in m["cierres"]["unknown_brands"]] == ["le-pain-doree"]
+    checks = {c["id"]: c for c in m["quality"]["checks"]}
+    assert checks["cierres"]["count"] == 1
+    assert "le-pain-doree" in render_html(m)
+
+
+def test_la_marca_cerrada_no_cierra_a_la_otra():
+    """La columna de estado es una sola para todo el eje, asi que solo puede
+    decir "sin operacion" cuando no opero nadie. Con Tecnoparque cerrada y SJI
+    vendiendo, el renglon es el de SJI y el rotulo va en la celda de Tecnoparque.
+    """
+    m = con_cierres(
+        [sale("2026-09-27", 500.0, brand="le-pain-dore"),
+         sale("2026-09-27", 100.0, brand="casa-dorelia"),
+         sale("2026-09-29", 200.0, brand="casa-dorelia")],
+        [{"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30"}])
+
+    assert series_of(m, "le-pain-dore")["2026-09-29"]["closed"] == "sin operacion"
+    assert series_of(m, "casa-dorelia")["2026-09-29"]["gross"] == 200.0
+    # SJI vendio ese dia: el eje no puede declararlo sin operacion.
+    assert m["day_states"]["2026-09-29"] == "cerrado"
+    # Y el 28, con las dos sin cobro pero solo una declarada cerrada, sigue
+    # siendo un cero medido para SJI.
+    assert series_of(m, "casa-dorelia")["2026-09-28"]["gross"] == 0.0
+    assert m["day_states"]["2026-09-28"] == "sin_cobro"
+
+
+def test_las_ventanas_de_la_marca_viven_en_su_renglon_y_no_en_uno_global():
+    m = con_cierres(
+        [sale("2026-09-27", 500.0, brand="le-pain-dore"),
+         sale("2026-09-27", 100.0, brand="casa-dorelia")],
+        [{"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30"}])
+
+    por_marca = {b["brand"]: b["no_operacion"] for b in m["brands"]}
+    assert por_marca["casa-dorelia"] == []
+    assert len(por_marca["le-pain-dore"]) == 1
+
+
+# ---- los controles del archivo ------------------------------------------
+
+def test_el_archivo_de_cierres_exige_marca_y_fechas(tmp_path):
+    from dashboard import load_cierres
+
+    # Sin marca la ventana aplicaria a todo el tablero, que es lo contrario de
+    # lo que se declaro.
+    with pytest.raises(DashboardError) as exc:
+        load_cierres(cierres_file(tmp_path, {
+            "source": "x",
+            "windows": [{"from": "2026-08-05", "to": "2026-09-20"}]}))
+    assert "`brand`" in str(exc.value)
+
+    with pytest.raises(DashboardError) as exc:
+        load_cierres(cierres_file(tmp_path, {
+            "source": "x", "windows": [{"brand": "le-pain-dore", "from": "2026-08-05"}]}))
+    assert "`to`" in str(exc.value)
+
+
+def test_una_ventana_invertida_truena_en_vez_de_no_marcar_nada(tmp_path):
+    from dashboard import load_cierres
+
+    # `from > to` no cubre ni un dia, y un archivo que no hace nada se ve igual
+    # que uno que funciona.
+    with pytest.raises(DashboardError) as exc:
+        load_cierres(cierres_file(tmp_path, {
+            "source": "x",
+            "windows": [{"brand": "le-pain-dore", "from": "2026-09-20",
+                         "to": "2026-08-05"}]}))
+    assert "invertida" in str(exc.value)
+
+
+def test_dos_ventanas_de_la_misma_marca_no_se_pueden_solapar(tmp_path):
+    from dashboard import load_cierres
+
+    with pytest.raises(DashboardError) as exc:
+        load_cierres(cierres_file(tmp_path, {
+            "source": "x",
+            "windows": [{"brand": "le-pain-dore", "from": "2026-08-05", "to": "2026-09-20"},
+                        {"brand": "le-pain-dore", "from": "2026-09-01", "to": "2026-09-25"}]}))
+    assert "se solapan" in str(exc.value)
+
+    # Dos marcas distintas en las mismas fechas si: son dos sucursales.
+    ok = load_cierres(cierres_file(tmp_path, {
+        "source": "x",
+        "windows": [{"brand": "le-pain-dore", "from": "2026-08-05", "to": "2026-09-20"},
+                    {"brand": "casa-dorelia", "from": "2026-08-05", "to": "2026-09-20"}]}))
+    assert len(ok["windows"]) == 2
+
+
+def test_los_dias_de_la_ventana_se_cuentan_no_se_escriben(tmp_path):
+    from dashboard import load_cierres
+
+    # 5/08 a 20/09 son 47 dias naturales. Un conteo escrito a mano en el JSON se
+    # desfasa en cuanto alguien mueve un extremo.
+    c = load_cierres(cierres_file(tmp_path, {
+        "source": "x",
+        "windows": [{"brand": "le-pain-dore", "from": "2026-08-05", "to": "2026-09-20",
+                     "days": 3}]}))
+    assert c["windows"][0]["days"] == 47
+    assert c["windows"][0]["label"] == "sin operacion"
+
+
+def test_el_archivo_real_declara_los_dos_cierres_de_tecnoparque():
+    from dashboard import load_cierres
+
+    # El archivo que se publica, validado por las mismas reglas. Las fechas son
+    # la determinacion de BOS-147: no se derivan del dato, asi que si alguien las
+    # cambia tiene que cambiar esta prueba con ellas.
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "cierres-casa-dorelia.json")
+    c = load_cierres(path)
+    assert "BOS-147" in c["source"]
+    assert [(w["brand"], w["from"], w["to"], w["days"]) for w in c["windows"]] == [
+        ("le-pain-dore", "2026-04-21", "2026-05-10", 20),
+        ("le-pain-dore", "2026-08-05", "2026-09-20", 47),
+    ]
+
+
+# ---- degradar sin esconder ----------------------------------------------
+
+def test_a_mano_un_archivo_de_cierres_roto_sigue_tronando(tmp_path):
+    from dashboard import load_cierres
+
+    with pytest.raises(DashboardError):
+        load_cierres(cierres_file(tmp_path, {"source": "x", "windows": []}))
+
+
+def test_el_republicado_se_queda_sin_ventanas_pero_lo_dice_en_la_pagina(tmp_path):
+    from dashboard import load_cierres_degrading
+
+    cierres, error = load_cierres_degrading(
+        cierres_file(tmp_path, {"source": "x", "windows": []}))
+    assert cierres is None
+    assert "ni una sola ventana" in error
+
+    # Degradar aqui cuesta mas que con el panel de apertura: sin ventanas vuelven
+    # los ceros falsos. Asi que la razon tiene que viajar **en la pagina**, junto
+    # a los ceros que la ventana iba a rotular, no solo en la consola.
+    m = model([sale("2026-10-02", 200.0), sale("2026-10-03", 300.0)])
+    m = dict(m, cierres=None, cierres_error=error)
+    assert "ni una sola ventana" in render_html(m)
+
+
+def test_sin_archivo_de_cierres_no_hay_error_que_reportar():
+    from dashboard import load_cierres_degrading
+
+    assert load_cierres_degrading(None) == (None, None)
+    m = model([sale("2026-10-03", 200.0)])
+    assert m["cierres"] is None and m["cierres_error"] is None
+
+
+def test_el_error_de_los_cierres_no_se_publica_si_las_ventanas_si_salieron():
+    m = con_cierres([sale("2026-10-01", 300.0, brand="le-pain-dore")],
+                    [{"brand": "le-pain-dore", "from": "2026-09-28",
+                      "to": "2026-09-30"}])
+    assert m["cierres"] is not None
+    assert m["cierres_error"] is None
+
+
+def test_la_fuente_del_cierre_viaja_hasta_la_pagina():
+    # Un hueco sin dueño es indistinguible de un hueco inventado, y este es el
+    # unico limite del tablero que no sale del dato sino de una determinacion.
+    m = con_cierres([sale("2026-09-27", 500.0, brand="le-pain-dore"),
+                     sale("2026-10-01", 300.0, brand="le-pain-dore")],
+                    [{"brand": "le-pain-dore", "from": "2026-09-28",
+                      "to": "2026-09-30"}],
+                    source="BOS-147, Jefatura de Tecnoparque")
+    assert "BOS-147, Jefatura de Tecnoparque" in render_html(m)
+
+
+def test_el_rotulo_de_los_controles_cuenta_su_propia_lista():
+    # Decia "los cinco"; al entrar el sexto control el texto se quedo mintiendo
+    # sobre su propia lista. Ahora el numero sale del modelo.
+    m = model([sale("2026-10-03", 200.0)])
+    assert len(m["quality"]["checks"]) == 6
+    assert "Los cinco deben estar en cero" not in render_html(m)

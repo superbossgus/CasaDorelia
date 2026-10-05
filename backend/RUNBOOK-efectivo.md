@@ -1,0 +1,106 @@
+# El efectivo: de donde sale y como se captura
+
+## Por que existe este documento
+
+La carga de Clip (`clip_daily.py`, BOS-119) trae **solo** lo que cobro la
+terminal. El efectivo que la app de Clip registra **no viaja por su API**, y eso
+ya no es una sospecha:
+
+- **Censo de la taxonomia completa**: 2,329 cobros de 360 dias de las dos
+  sucursales, agrupados por `(payment_method, sub_type, marca, emisor, status)`.
+  **Cero** rotulados efectivo. Reproducible:
+  `python backend/clip_api.py census --branch tecnoparque --days 360`
+  (el campo a leer es `efectivo_en_la_api`; **se calcula**, asi que el dia que
+  Clip empiece a mandarlo el veredicto cambia solo).
+- **La doc de Clip dice lo mismo**: su guia de conciliacion pone el recibo del
+  cobro en efectivo en la app, el panel, los reportes descargables y el correo —
+  en ningun endpoint. Y la referencia publica de APIs (Checkout, PinPad,
+  Refunds, Transactions, Deposits) no tiene nada de efectivo.
+
+Consecuencia operativa: **un dia sin corte de caja tiene una cifra que es piso,
+no la venta del dia.** Dos piezas, dos fuentes:
+
+| Pieza | Fuente | Entra sola |
+|---|---|---|
+| Tarjeta y vales | API de Clip (`clip_daily.py`, 07:45 y 19:45 CDMX) | si |
+| Efectivo | corte de caja capturado en el app | no: alguien lo cuenta |
+
+## Como se captura (pantalla)
+
+`Corte de Caja` en el menu, o la ruta `corte-caja` del app. La abre tambien el
+**cajero**: es quien cierra el cajon.
+
+Se capturan los tres numeros que **se pueden contar**:
+
+| Campo | Que es |
+|---|---|
+| `fondo_inicial` | con cuanto abrio la caja (lo propone el corte anterior) |
+| `efectivo_contado` | todo lo que hay en el cajon al cerrar, **incluido el fondo** |
+| `retiros` | lo que salio del cajon en el dia (depositos, pagos, traslados) |
+
+La venta en efectivo **no se captura**: la deriva el servidor.
+
+    ventas_efectivo = efectivo_contado + retiros - fondo_inicial
+
+Opcionales: `tickets_efectivo` (cuantos cobros) y `notas`.
+
+### Lo que la pantalla no te va a dejar hacer
+
+- **Guardar un efectivo negativo.** Significa que falta un retiro o que el fondo
+  esta mal. Guardarlo restaria venta de un dia que si vendio.
+- **Guardar un dedazo de ceros.** `115600` en vez de `1156.00` choca con un tope
+  de cordura de $200,000 por corte.
+- **Capturar dos veces el mismo turno.** La segunda captura te ofrece
+  **corregir** la primera. Lo impide tambien un indice unico de
+  `(tenant_id, cafeteria_id, business_date, turno)`, que es lo que corta la
+  carrera entre dos capturas simultaneas.
+- **Mover un corte de dia, sucursal, turno o marca.** Eso se arregla capturando
+  el corte correcto, no editando el guardado.
+- **Corregir sin decir por que**, y solo admin/gerente: el monto anterior, quien
+  y el motivo quedan en `revisions`.
+
+### Un corte en cero SI se captura
+
+Es el caso que mas se olvida y el mas util: `$0.00` de efectivo es un cero
+**medido**, y eso vuelve **citable** el bruto con tarjeta de ese dia. Un dia sin
+corte es un hueco. No es lo mismo.
+
+## Como se lee
+
+Desde el app:
+
+- `GET /api/cash-cuts?cafeteria_id=&start_date=&end_date=` — los cortes, con el
+  resumen **por marca** ya hecho (la pantalla no suma marcas por su cuenta: Casa
+  Dorelia y Le Pain Dore tienen repartos distintos).
+- `GET /api/cash-cuts/prefill?cafeteria_id=&business_date=` — que proponer antes
+  de contar, si ya hay corte de ese dia, y el bruto con tarjeta del dia.
+
+Sin levantar el app (solo lectura, no escribe en Mongo):
+
+    python backend/cash_cut.py --db casa_dorelia
+    python backend/cash_cut.py --db casa_dorelia --date 2026-10-04
+    python backend/cash_cut.py --db casa_dorelia --from 2026-10-01 --to 2026-10-31
+
+## La diferencia contra el sistema (y por que casi siempre sale vacia)
+
+`diferencia` solo se calcula cuando el app **ya tiene** venta en efectivo
+capturada de ese dia (punto de venta). Hoy la sucursal no lo usa, asi que sale
+`None` con el motivo escrito. Restar contra cero reportaria un faltante del
+tamaño de todo el efectivo del dia, y eso acusa a alguien de algo que no paso.
+
+## Lo que todavia falta
+
+- **El tablero de ventas aun no publica este efectivo**: sigue dibujando solo
+  tarjeta y rotulando "piso" incluso en dias que ya tengan corte. Hasta que eso
+  entre, el total completo del dia se lee en la pantalla del corte (por
+  sucursal).
+- **El flujo end-to-end no esta probado con la app levantada** en este entorno
+  (faltan `dotenv`/`motor` en el Python del sandbox y `node_modules` del
+  frontend). Lo probado: el modulo puro (30 pruebas) y el indice unico contra un
+  mongod real (`python backend/tests/probe_cash_cut_index.py`).
+
+## Si Clip algun dia si entrega el efectivo
+
+No hay que reescribir nada de esto: el veredicto `efectivo_en_la_api` del censo
+se calcula, y el corte de caja seguiria sirviendo para cuadrar contra la caja
+fisica, que es algo que ninguna API da.

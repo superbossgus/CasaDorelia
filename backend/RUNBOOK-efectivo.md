@@ -98,10 +98,33 @@ tamaño de todo el efectivo del dia, y eso acusa a alguien de algo que no paso.
   no cambia: la grafica se queda en tarjeta (una linea mitad tarjeta y mitad
   total daria un escalon el dia del primer corte que se leeria como un salto de
   venta), y el total del rango tampoco mezcla dias con y sin corte.
-- **El flujo end-to-end no esta probado con la app levantada** en este entorno
-  (faltan `dotenv`/`motor` en el Python del sandbox y `node_modules` del
-  frontend). Lo probado: el modulo puro (30 pruebas) y el indice unico contra un
-  mongod real (`python backend/tests/probe_cash_cut_index.py`).
+- ~~**El flujo end-to-end no esta probado con la app levantada.**~~ Se probo en
+  BOS-150: los nueve pasos del plan contra `uvicorn server:app` con un mongod
+  real y login real de cuatro roles. Quedo como probe re-corrible
+  (`backend/tests/probe_cash_cut_api.py`, 29 comprobaciones) y saco dos
+  defectos, los dos ya corregidos: el prefill no miraba el `turno` (una
+  sucursal de dos turnos no podia capturar el segundo, con el dia rotulado como
+  completo) y `GET /cash-cuts` no revalidaba el `cafeteria_id` del query (un
+  cajero leia el efectivo de la otra marca).
+- **La pantalla no se ha usado en un telefono de verdad.** Lo verificado es que
+  compila, que los ocho campos de dinero declaran teclado numerico
+  (`inputMode` decimal/numeric, confirmado en el bundle) y que el derivado sale
+  en `text-4xl`. Falta la prueba en el mostrador, que es donde se usa.
+
+### Como levantar esto para probarlo
+
+Dos trampas del entorno, las dos documentadas porque cuestan una tarde:
+
+1. `server.py` importa `emergentintegrations`, que es un paquete **privado** y
+   no esta en PyPI: `pip install` no lo resuelve y el modulo no se puede ni
+   importar. Para probar se levanta con un stub local fuera del arbol del repo.
+   Quitarle esa dependencia es BOS-69.
+2. `EmailStr` rechaza los dominios de uso especial (`.test`, `.example`), asi
+   que un usuario de prueba con esos correos hace que el login conteste **422**
+   y no 401. Los fixtures del probe usan un dominio normal a proposito.
+
+El procedimiento completo esta en el docstring de
+`backend/tests/probe_cash_cut_api.py`.
 
 ## Si Clip algun dia si entrega el efectivo
 

@@ -124,6 +124,25 @@ Decisiones que cambian el dinero reportado (y por que):
    **piso**, y el faltante **no es chico**. La cobertura la declara
    `sales_import.CASH_COVERAGE["clip_api"]`; aqui no se simula.
 
+   **Cerrado por decision, no por respuesta de Clip** (2026-10-04, BOS-151).
+   Faltaba un paso que ningun agente puede dar: preguntarle a soporte si la
+   cuenta puede habilitar un alcance de efectivo, porque Clip verifica la
+   propiedad del comercio y eso sale del buzon del titular. Gustavo decidio
+   **no** mandar esa consulta, asi que la pregunta queda cerrada con lo medido
+   arriba. La distincion importa para quien lea esto despues: Clip **no**
+   contesto "no existe" — no se le pregunto. Lo que sostiene el cierre es la
+   medicion de este modulo (19 rutas, tres valores de `payment_method`, el
+   filtro que se ignora, los depositos todos con tarjeta), no una declaracion
+   del proveedor. Si alguien quiere reabrirlo, el mensaje ya esta escrito en la
+   tarjeta y no hay que volver a medir nada.
+
+   Por eso el veredicto sigue **calculandose** y no esta escrito a mano: el dia
+   que Clip empiece a mandar efectivo, `efectivo_en_la_api` se vuelve `true`
+   solo y este parrafo queda viejo. Un cierre por decision no es un hecho
+   tecnico permanente. Mientras tanto la unica fuente del efectivo es el corte
+   de caja de la app propia (`backend/cash_cut.py` y `RUNBOOK-efectivo.md`, en
+   la rama de la app), que es exactamente el camino que si se construyo.
+
 Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
     python clip_api.py pull --branch sji --from 2026-09-21 --to 2026-10-01

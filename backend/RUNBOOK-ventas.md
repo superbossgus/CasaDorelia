@@ -461,19 +461,26 @@ y la propia guia de conciliacion de Clip pone el recibo del efectivo en la app,
 el panel, los reportes y el correo — en ningun endpoint. Insistir mas en la API
 de pagos es buscar donde el proveedor ya dijo que no esta.
 
-Los tres caminos que quedan, de menos a mas costo:
+Los tres caminos que quedaban, con su estado al 2026-10-04:
 
-1. **Credencial del panel como secreto de Paperclip.** El panel es una
-   aplicacion web con su propia API, y ahi si vive el efectivo. Requiere que
-   Gustavo cargue usuario/contrasena (o la sesion) como secreto — **jamas en un
-   comentario ni en el codigo** — y aprobacion explicita, porque toca
-   credenciales de pagos.
-2. **Pedirle a Clip el alcance.** La llave de comercio cubre pagos de terminal.
-   Que la cuenta pueda leer el efectivo por API es una pregunta para soporte /
-   el panel de desarrolladores, no un parametro que falte.
-3. **Captura del corte de caja en la app propia.** Una pantalla de cierre por
-   turno, que ademas sirve para cuadrar contra la caja fisica. Es el unico
-   camino que no depende de Clip, y el mas trabajo.
+1. **Credencial del panel como secreto de Paperclip.** *Abierto, sin pedir.* El
+   panel es una aplicacion web con su propia API, y ahi si vive el efectivo.
+   Requiere que Gustavo cargue usuario/contrasena (o la sesion) como secreto
+   — **jamas en un comentario ni en el codigo** — y aprobacion explicita, porque
+   toca credenciales de pagos.
+2. **Pedirle a Clip el alcance.** *Cerrado el 2026-10-04 por decision de
+   Gustavo* (BOS-151). La consulta quedo escrita y respaldada con medicion, y
+   decidio no mandarla. **Ojo con como se lee esto despues: Clip nunca
+   contesto** — no se le pregunto. El cierre lo sostiene la medicion de este
+   repo (el censo de 2,329 cobros, el esquema completo de 19 rutas, el filtro
+   `payment_method` probado con control y el reporte de depositos), no una
+   declaracion del proveedor. Reabrirlo cuesta mandar el mensaje que ya esta en
+   la tarjeta; no hay que volver a medir nada.
+3. **Captura del corte de caja en la app propia.** *Hecho* — es el camino que se
+   construyo (`backend/cash_cut.py` y `RUNBOOK-efectivo.md`, en la rama de la
+   app): una pantalla de cierre por turno que ademas cuadra contra la caja
+   fisica. Es la unica fuente del efectivo hoy, y es el unico camino que no
+   depende de Clip.
 
 Mientras no entre un solo renglon de efectivo, todo total de este camino es un
 **piso**. El tablero lo dice y lo *calcula* (`limits.cash_excluded` es

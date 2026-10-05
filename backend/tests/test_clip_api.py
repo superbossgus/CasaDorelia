@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from clip_api import (  # noqa: E402
+    MAX_DISTINCT_VALUES,
     MAX_PAGES_PER_WINDOW,
     ClipApiError,
     ClipAuthError,
@@ -32,9 +33,11 @@ from clip_api import (  # noqa: E402
     load_credentials,
     map_payment,
     probe_deposits,
+    probe_method_filter,
     split_window,
     summarize_census,
     summarize_corte,
+    summarize_schema,
 )
 from sales_import import SOURCE_CLIP_API, normalize_row, plan_import  # noqa: E402
 
@@ -619,6 +622,141 @@ def test_el_censo_separa_vales_de_tarjeta_y_no_cruza_estados():
     # La cancelada aparece en la taxonomia pero no en lo cobrado.
     assert 999.0 not in [b["gross_amount"] for b in censo["gross_by_payment_method"].values()]
     assert any(b["status"] == "reversed" for b in censo["by_taxonomy"])
+
+
+# --------------------------------------------------------------------------
+# Esquema: no "?llego efectivo?" sino "?cabe el efectivo?" (BOS-151)
+# --------------------------------------------------------------------------
+
+def test_el_inventario_lista_toda_ruta_incluso_las_anidadas():
+    """Si Clip agrega un campo, tiene que aparecer aqui sin tocar codigo.
+
+    El censo agrupa por los campos que ELEGIMOS mirar; si el efectivo llegara
+    rotulado en otro campo, el censo diria cero igual. Este inventario recorre
+    el arbol completo, asi que un campo nuevo no se puede esconder.
+    """
+    reporte = summarize_schema([
+        payment(card={"brand": "VI", "issuer": "BBVA", "last4": "4242"},
+                location={"latitude": "19.3", "longitude": "-99.1"}),
+    ], branch="sji")
+
+    campos = {campo["path"]: campo for campo in reporte["fields"]}
+    assert "card.issuer" in campos
+    assert "location.latitude" in campos
+    assert "payment_method" in campos
+    # `card` es contenedor: no tiene valores propios, y decir `values: []`
+    # se leeria como "nunca trajo nada".
+    assert campos["card"]["container"] is True
+    assert campos["card"]["values"] is None
+    assert campos["card.brand"]["container"] is False
+
+
+def test_un_campo_con_pocos_valores_los_enumera_y_uno_abierto_no_miente():
+    """Un campo cerrado se enumera; uno abierto se reporta `None`, no `[]`.
+
+    La diferencia importa: `values: []` se leeria como "nunca trajo nada", que
+    es justo la clase de cero inventado que hay que evitar.
+    """
+    filas = [payment(receipt_no=f"R{i:03d}", payment_method="DEBIT")
+             for i in range(MAX_DISTINCT_VALUES + 1)]
+    filas.append(payment(receipt_no="ULTIMO", payment_method="CREDIT"))
+    reporte = summarize_schema(filas, branch="sji")
+    campos = {campo["path"]: campo for campo in reporte["fields"]}
+
+    # Pocos valores -> se enumeran, y asi se ve el vocabulario real de la API.
+    assert campos["payment_method"]["values"] == ["CREDIT", "DEBIT"]
+    assert campos["payment_method"]["present"] == len(filas)
+    # Demasiados valores distintos -> set abierto, reportado como None.
+    assert campos["receipt_no"]["values"] is None
+    assert reporte["payment_method_values"] == {"DEBIT": MAX_DISTINCT_VALUES + 1,
+                                               "CREDIT": 1}
+
+
+def test_un_valor_largo_abre_el_set_en_lugar_de_llenar_el_reporte():
+    reporte = summarize_schema(
+        [payment(user_email="gustavo.jimenez.cerda@casadorelia.com.mx")],
+        branch="sji")
+    campos = {campo["path"]: campo for campo in reporte["fields"]}
+    assert campos["user_email"]["present"] == 1
+    assert campos["user_email"]["values"] is None
+
+
+def test_un_campo_nulo_se_cuenta_aparte_de_un_campo_ausente():
+    reporte = summarize_schema([payment(terms=None), payment(terms=None)],
+                               branch="sji")
+    campos = {campo["path"]: campo for campo in reporte["fields"]}
+    # Existe en las dos (el esquema lo trae) pero nunca con valor.
+    assert campos["terms"]["present"] == 2
+    assert campos["terms"]["nulls"] == 2
+    assert campos["terms"]["values"] == []
+
+
+def test_el_veredicto_del_esquema_busca_efectivo_en_cualquier_campo():
+    """No alcanza con revisar `payment_method`: el barrido es sobre todo el JSON."""
+    limpio = summarize_schema([payment()], branch="sji")
+    assert limpio["efectivo_en_el_esquema"] is False
+    assert limpio["mentions_cash"] == []
+
+    # Aunque Clip lo metiera en un campo que nadie habia visto, se detecta.
+    raro = summarize_schema(
+        [payment(receipt_no="EF1", tender_type="EFECTIVO")], branch="sji")
+    assert raro["efectivo_en_el_esquema"] is True
+    assert raro["mentions_cash"] == ["EF1"]
+    assert "cargarlos" in raro["note"]
+
+
+def test_el_esquema_senala_por_folio_los_renglones_sin_tarjeta():
+    reporte = summarize_schema([
+        payment(receipt_no="T1"),
+        payment(receipt_no="X1", payment_method="OTHER", status="",
+                card={"brand": "XX", "issuer": None, "last4": "0000"}),
+    ], branch="sji")
+
+    assert reporte["card_identity"] == {"with_card": 1, "without_card": 1}
+    # Por folio, para que se pueda ir a ver cada uno en el panel.
+    assert reporte["cardless_receipts"] == ["X1"]
+    # Y sin tarjeta NO es lo mismo que efectivo: eso se decide con el cruce
+    # contra `?status=cancelled`, no con la forma del renglon.
+    assert reporte["efectivo_en_el_esquema"] is False
+
+
+def test_el_filtro_payment_method_se_declara_inexistente_solo_con_control():
+    """Un 200 a `payment_method=CASH` no prueba nada sin el control.
+
+    Puede ser "el filtro existe y no hay efectivo" o "el parametro se ignora".
+    Se distingue mandando un valor absurdo: si tambien pasa, se ignora.
+    """
+    transport = FakeTransport([
+        page([payment(), payment()]),               # payment_method=CASH
+        page([payment(), payment()]),               # el valor absurdo: igual
+        (400, {"response_messages": [{"code": "payclip.bad.request"}]}),  # status=ZZZZ
+    ])
+    reporte = probe_method_filter(CREDS, transport=transport, now=NOW)
+
+    assert reporte["filtro_payment_method_existe"] is False
+    assert reporte["api_valida_parametros"] is True
+    assert "se ignora" in reporte["note"]
+    assert "payment_method=CASH" in transport.urls[0]
+
+
+def test_si_el_filtro_rechazara_el_valor_absurdo_no_se_le_llama_ignorado():
+    transport = FakeTransport([
+        page([payment()]),                                 # CASH -> 200
+        (400, {"message": "invalid payment_method"}),       # absurdo -> 400
+        (400, {"message": "bad request"}),                  # status=ZZZZ -> 400
+    ])
+    reporte = probe_method_filter(CREDS, transport=transport, now=NOW)
+
+    assert reporte["filtro_payment_method_existe"] is True
+    assert "vale la pena" in reporte["note"]
+
+
+def test_el_probe_del_filtro_viaja_con_el_user_agent_propio():
+    transport = FakeTransport([page([]), page([]), (400, {})])
+    probe_method_filter(CREDS, transport=transport, now=NOW)
+    # Sin `User-Agent` el WAF contesta 403 y el 403 se leeria como credencial.
+    assert all(h.get("User-Agent") for h in transport.headers)
+    assert all(h.get("Authorization", "").startswith("Basic ") for h in transport.headers)
 
 
 def test_tope_de_paginas_por_ventana():

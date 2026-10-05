@@ -9,8 +9,15 @@ en un log, en un error ni en un repr. Entrega filas con la misma forma que
 Contrato de la API, verificado contra developer.clip.mx (2026-10-01):
 
 - `GET https://api-gw.payclip.com/payments`
-- `GET https://api-gw.payclip.com/settlements[/{id}]` (depositos): documentado,
-  pero **401 para esta cuenta**; ver `probe_deposits`.
+- `GET https://api-gw.payclip.com/settlements[/{id}]` (depositos): se lee bien
+  con la misma llave de comercio; ver `probe_deposits`. (Una version anterior de
+  este archivo decia "401 para esta cuenta": era un bug nuestro, no un alcance
+  faltante.)
+- **No hay detalle por transaccion.** Probado el 2026-10-04 con un folio real:
+  `GET /payments/{receipt_no}` -> 500, `GET /transactions/{id}` -> 403
+  `Forbidden`, `GET /payment/{id}` -> 403 pidiendo firma AWS. El renglon de la
+  lista **es** el registro completo que ve la llave de comercio; no hay una
+  vista mas detallada atras donde pudiera venir el metodo de pago real.
 - Autenticacion: `Authorization: Basic base64(API_KEY:SECRET_KEY)`. El panel de
   Clip entrega las dos piezas al crear la credencial y **el secret key solo se
   puede ver una vez**; si se pierde hay que generar otra.
@@ -70,6 +77,23 @@ Decisiones que cambian el dinero reportado (y por que):
    tarjeta, y eso explica la forma sin tener que inventarle efectivo. Con eso el
    cajon "sin tarjeta" queda en 0 renglones cobrados en un año.
 
+   Y no es que no haya llegado: es que **no cabe**. Son dos afirmaciones
+   distintas, y la segunda se midio aparte (ver `summarize_schema` y
+   `probe_method_filter`, `python clip_api.py schema`):
+
+   - El esquema que manda la API son **19 rutas, las mismas 19 en las 2,332
+     transacciones** del año. `payment_method` toma exactamente tres valores:
+     `CREDIT`, `DEBIT`, `OTHER`. Ninguna ruta, en ningun renglon, nombra
+     efectivo — barrido de texto sobre el JSON completo, no sobre los campos
+     que se nos ocurrieron.
+   - `card.brand` y `card.last4` vienen en **2,332 de 2,332**. Las dos unicas
+     excepciones son exactamente los dos folios que Clip devuelve bajo
+     `?status=cancelled`, y `paid + cancelled == total` sin residuo: no hay un
+     tercer cajon donde esconder el efectivo.
+   - `payment_method` **no es un filtro**: se ignora (un valor absurdo devuelve
+     las mismas filas que `CASH`), mientras `status=ZZZZ` si contesta 400. O sea
+     que la API valida lo que conoce, y no conoce el efectivo ni para pedirlo.
+
    Y cuadra con la realidad que reporta Gustavo: 6 a 20 cobros en efectivo por
    dia por sucursal, y el 30/08 hubo 5 en SJI; ese dia la API entrega **2**
    renglones de SJI (un cobro con tarjeta de $5.00 y una cancelacion de $5.00).
@@ -89,6 +113,7 @@ Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
     python clip_api.py pull --branch sji --from 2026-09-21 --to 2026-10-01
     python clip_api.py census --branch sji --days 360   # ?ya llega efectivo?
+    python clip_api.py schema --branch sji --days 360   # ?cabe el efectivo?
     python clip_api.py deposits --branch sji            # ?y en los depositos?
 """
 from __future__ import annotations
@@ -809,6 +834,231 @@ def summarize_census(payments: Iterable[Mapping[str, Any]], *,
 
 
 # --------------------------------------------------------------------------
+# Esquema: que campos EXISTEN, no solo que valores trajeron
+# --------------------------------------------------------------------------
+#
+# El censo agrupa por la tupla donde **esperamos** ver el efectivo. Eso contesta
+# "no llego", pero no contesta "no cabe": si Clip rotulara el efectivo en un
+# campo que el censo no mira, el censo diria cero igual. Son dos afirmaciones
+# distintas y solo la segunda cierra la pregunta.
+#
+# Por eso aqui no se agrupa por campos elegidos a mano: se recorre **todo** el
+# arbol de cada transaccion y se levanta el inventario de rutas que la API
+# manda, con los valores que toma cada una. Medido el 2026-10-04 (BOS-151) en
+# las dos cuentas, 360 dias, 2,332 transacciones: **19 rutas, las mismas 19 en
+# todas**, y `payment_method` toma exactamente tres valores (`CREDIT`, `DEBIT`,
+# `OTHER`). No hay campo donde quepa un cobro en efectivo.
+
+# Cuantos valores distintos se guardan por campo antes de darlo por abierto.
+MAX_DISTINCT_VALUES = 12
+
+# Etiquetas que delatarian un cobro en efectivo, en cualquier campo de cualquier
+# superficie (transacciones o depositos).
+CASH_LABELS = ("cash", "efectivo", "contado")
+
+
+def _new_field_slot() -> Dict[str, Any]:
+    return {"present": 0, "nulls": 0, "values": set(),
+            "open_set": False, "container": False}
+
+
+def _walk_fields(value: Any, path: str, fields: Dict[str, Dict[str, Any]]) -> None:
+    """Registra cada ruta del arbol y los valores que toma (hasta cerrar el set)."""
+    if isinstance(value, Mapping):
+        if path:
+            # Un contenedor no tiene valores propios. Reportarle `values: []`
+            # se leeria como "nunca trajo nada", que es un cero inventado.
+            fields.setdefault(path, _new_field_slot())["container"] = True
+        for key, item in value.items():
+            child = f"{path}.{key}" if path else str(key)
+            fields.setdefault(child, _new_field_slot())["present"] += 1
+            _walk_fields(item, child, fields)
+        return
+
+    if isinstance(value, (list, tuple)):
+        if path:
+            fields.setdefault(path, _new_field_slot())["container"] = True
+        for item in value:
+            _walk_fields(item, f"{path}[]", fields)
+        return
+
+    if not path:
+        return
+
+    slot = fields.setdefault(path, _new_field_slot())
+    if value is None:
+        slot["nulls"] += 1
+        return
+    if slot["open_set"]:
+        return
+    text = str(value)
+    # Un campo con valores largos (montos, ids, correos) no se enumera: lo que
+    # importa de el es que existe, no la lista.
+    if len(text) > 32 or len(slot["values"]) >= MAX_DISTINCT_VALUES:
+        slot["open_set"] = True
+        slot["values"] = set()
+        return
+    slot["values"].add(text)
+
+
+def _mentions_cash(payment: Mapping[str, Any]) -> bool:
+    """?Alguna parte del JSON de esta transaccion dice efectivo, en cualquier campo?
+
+    Barrido de texto sobre la transaccion completa, no sobre los campos que se
+    nos ocurrieron. Es la unica forma de decir "no aparece en ningun lado" sin
+    haber elegido primero donde mirar.
+    """
+    blob = json.dumps(payment, ensure_ascii=False).lower()
+    return any(label in blob for label in CASH_LABELS)
+
+
+def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
+                     branch: str) -> Dict[str, Any]:
+    """Inventario del esquema que entrega `/payments`, campo por campo.
+
+    Contesta la version fuerte de la pregunta de BOS-151: no "?llego efectivo?"
+    sino "?existe algun campo donde pudiera llegar?". Reporta aparte:
+
+    - `fields`: toda ruta que la API mando, con `present`, `nulls` y los valores
+      que toma cuando son pocos. Si cambia el esquema, cambia esta lista.
+    - `card_identity`: cuantas transacciones llegan **sin** marca ni ultimos 4.
+      Esos son los unicos candidatos a efectivo.
+    - `cardless_receipts` / `mentions_cash`: los renglones concretos, por folio,
+      para que el que lea pueda ir a verlos uno por uno.
+
+    `efectivo_en_el_esquema` es el veredicto, y es `true` solo si algo nombra
+    efectivo. No se infiere de un conteo en cero: un cero puede ser un dia sin
+    efectivo, pero un esquema sin campo es estructural.
+    """
+    fields: Dict[str, Dict[str, Any]] = {}
+    total = 0
+    sin_tarjeta: List[str] = []
+    menciona: List[str] = []
+    metodos: Dict[str, int] = {}
+
+    for payment in payments:
+        total += 1
+        _walk_fields(payment, "", fields)
+
+        metodo = (_text(payment.get("payment_method")) or "(vacio)").upper()
+        metodos[metodo] = metodos.get(metodo, 0) + 1
+
+        folio = _text(payment.get("receipt_no")) or f"(sin folio #{total})"
+        if not _has_card_identity(_card_info(payment)):
+            sin_tarjeta.append(folio)
+        if _mentions_cash(payment):
+            menciona.append(folio)
+
+    return {
+        "branch": branch,
+        "transactions": total,
+        "fields": [
+            {
+                "path": path,
+                "present": slot["present"],
+                "nulls": slot["nulls"],
+                "container": slot["container"],
+                "values": None if (slot["open_set"] or slot["container"])
+                else sorted(slot["values"]),
+            }
+            for path, slot in sorted(fields.items())
+        ],
+        "payment_method_values": dict(sorted(metodos.items(), key=lambda kv: -kv[1])),
+        "card_identity": {
+            "with_card": total - len(sin_tarjeta),
+            "without_card": len(sin_tarjeta),
+        },
+        "cardless_receipts": sin_tarjeta,
+        "mentions_cash": menciona,
+        "efectivo_en_el_esquema": bool(menciona),
+        "note": (
+            "efectivo_en_el_esquema: false -> ninguna de las rutas del esquema "
+            "nombra efectivo, en ningun renglon. Los renglones sin tarjeta hay "
+            "que cruzarlos con ?status=cancelled antes de llamarles efectivo."
+        ) if not menciona else (
+            "efectivo_en_el_esquema: true -> hay renglones que nombran efectivo; "
+            "revisar `mentions_cash` y cargarlos."
+        ),
+    }
+
+
+# Parametros que se le prueban al endpoint para ver si el filtro existe.
+#
+# Esto necesita un control o no mide nada: si `payment_method=CASH` contesta
+# 200, puede ser que el filtro exista y no haya efectivo, **o** que el
+# parametro se ignore. Se distinguen mandando ademas un valor absurdo
+# (`_CONTROL_NONSENSE`) y un parametro que si se sabe validado (`status`):
+#
+#     payment_method=CASH           -> 200, 36 filas
+#     payment_method=ZZZZZ_CONTROL  -> 200, 36 filas   <- mismas filas: se ignora
+#     status=ZZZZ                   -> 400 payclip.bad.request  <- si valida
+#
+# O sea: la API valida lo que conoce, y `payment_method` no es un filtro. No hay
+# cajon de efectivo que pedirle.
+_CONTROL_NONSENSE = "ZZZZZ_CONTROL"
+
+
+def probe_method_filter(credentials: ClipCredentials, *,
+                        days: int = 7,
+                        transport: Optional[Transport] = None,
+                        now: Optional[datetime] = None) -> Dict[str, Any]:
+    """?Se le puede *pedir* a `/payments` el efectivo con un filtro?
+
+    Devuelve el resultado de cada intento y un veredicto. `filtro_existe` solo
+    es `true` si el valor absurdo se rechaza y el bueno no: si los dos pasan,
+    el parametro se esta ignorando y el 200 no significa nada.
+    """
+    transport = _urllib_transport if transport is None else transport
+    end = (now or datetime.now(timezone.utc)) - timedelta(hours=6)
+    start = end - timedelta(days=max(1, days))
+
+    headers = dict(BASE_HEADERS)
+    headers["Authorization"] = credentials.auth_header()
+
+    intentos: List[Dict[str, Any]] = []
+    for param, value in (
+        ("payment_method", "CASH"),
+        ("payment_method", _CONTROL_NONSENSE),
+        ("status", "ZZZZ"),
+    ):
+        params = [("from", _iso(start)), ("to", _iso(end)),
+                  ("limit", str(DEFAULT_LIMIT)), (param, value)]
+        url = f"{API_BASE.rstrip('/')}{PAYMENTS_PATH}?{urllib.parse.urlencode(params)}"
+        status_code, body = transport(url, headers)
+        filas: Optional[int] = None
+        if status_code == 200:
+            try:
+                filas = len(_page_items(json.loads(body.decode("utf-8"))))
+            except (ValueError, ClipApiError):
+                filas = None
+        intentos.append({"param": param, "value": value,
+                         "http_status": status_code, "rows": filas})
+
+    por_valor = {(i["param"], i["value"]): i for i in intentos}
+    cash = por_valor[("payment_method", "CASH")]
+    control = por_valor[("payment_method", _CONTROL_NONSENSE)]
+    valida = por_valor[("status", "ZZZZ")]
+
+    ignorado = (cash["http_status"] == 200 and control["http_status"] == 200
+                and cash["rows"] == control["rows"])
+    return {
+        "branch": credentials.branch,
+        "window": {"from": _iso(start), "to": _iso(end)},
+        "attempts": intentos,
+        "api_valida_parametros": valida["http_status"] == 400,
+        "filtro_payment_method_existe": not ignorado,
+        "note": (
+            "El parametro `payment_method` se ignora: el valor bueno y el absurdo "
+            "devuelven las mismas filas, mientras `status=ZZZZ` si contesta 400. "
+            "No hay filtro con el que pedirle efectivo a este endpoint."
+        ) if ignorado else (
+            "El filtro `payment_method` si se valida; vale la pena pedirle efectivo "
+            "y medir el resultado."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
 # Depositos (la otra superficie que trae `payment_method`)
 # --------------------------------------------------------------------------
 #
@@ -817,24 +1067,26 @@ def summarize_census(payments: Iterable[Mapping[str, Any]], *,
 # censo nunca lo midio, asi que mientras no se pruebe, "la API no da efectivo"
 # era una afirmacion sobre UNA ruta, no sobre la cuenta.
 #
-# Medido el 2026-10-04 (BOS-151), las dos sucursales, los cinco rellenos de
-# credencial que admite la doc de autenticacion (ver `deposit_auth_schemes`):
+# Medido el 2026-10-04 (BOS-151) **se lee bien**, en las dos sucursales. El
+# heartbeat anterior reporto `401` en los cinco rellenos de credencial y
+# concluyo que la cuenta no tiene alcance de depositos: era falso, y eran tres
+# bugs nuestros disfrazados de respuesta de Clip (ver `deposit_auth_schemes`,
+# `build_settlements_url` y `settlement_detail_url`). Corregidos:
 #
 #     GET /payments      Basic -> 200   (82 cobros en 20 dias, control positivo)
-#     GET /settlements    todos -> 401  {"message":"Unauthorized"}
+#     GET /settlements   Basic -> 200   (SJI: 6 depositos, 38 transacciones)
 #
-# O sea: la llave de comercio que si lee transacciones **no** tiene alcance de
-# depositos. El 401 no dice "no hay efectivo aqui", dice "no puedes ver". Es una
-# pregunta abierta para Clip, no un hueco medido, y por eso este comando reporta
-# `acceso` aparte de `efectivo_en_depositos`: no se vale contar un 401 como cero.
+# Las 38 transacciones del desglose llegan **todas con tarjeta** (marca y
+# ultimos 4), asi que tampoco hay efectivo ahi — y estructuralmente no puede
+# haberlo: un deposito es dinero que Clip disperso, y el efectivo nunca lo toca.
+# Eso ya es una medicion. Aun asi este comando sigue reportando `acceso` aparte
+# de `efectivo_en_depositos`, porque el dia que vuelva un 401 hay que publicarlo
+# como "no puedes ver", no como cero.
 
 SETTLEMENTS_PATH = "/settlements"
 
 # Clip solo deja 90 dias de antiguedad en el resumen de depositos.
 MAX_DEPOSIT_AGE = timedelta(days=90)
-
-# Etiquetas que delatarian un cobro en efectivo registrado en la app.
-CASH_LABELS = ("cash", "efectivo", "contado")
 
 
 def _business_date(value: datetime) -> date:
@@ -1126,6 +1378,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     census.add_argument("--days", type=int, default=360,
                         help="cuantos dias hacia atras (default 360; el tope de Clip es un ano)")
 
+    schema = sub.add_parser(
+        "schema",
+        help="inventario del esquema de /payments: ?existe campo donde quepa el efectivo? (BOS-151)",
+    )
+    schema.add_argument("--branch", required=True)
+    schema.add_argument("--days", type=int, default=360,
+                        help="cuantos dias hacia atras (default 360; el tope de Clip es un ano)")
+
     deposits = sub.add_parser(
         "deposits",
         help="prueba si la cuenta puede leer el reporte de depositos, y si trae efectivo (BOS-151)",
@@ -1164,6 +1424,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 summarize_census(iter_payments(credentials, start, end),
                                  branch=credentials.branch),
                 indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "schema":
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=max(1, args.days))
+            report = summarize_schema(iter_payments(credentials, start, end),
+                                      branch=credentials.branch)
+
+            # El cruce que cierra la pregunta: los unicos renglones sin tarjeta
+            # tienen que ser los mismos que Clip devuelve bajo
+            # `?status=cancelled`. Si coinciden, no son efectivo: son
+            # cancelaciones, y lo dice la API con su propio filtro. Si NO
+            # coinciden, quedo un renglon sin explicar y hay que ir a verlo.
+            canceladas = {
+                _text(p.get("receipt_no"))
+                for p in iter_payments(credentials, start, end, status="cancelled")
+            }
+            sin_tarjeta = set(report["cardless_receipts"])
+            report["cancelled_receipts"] = len(canceladas)
+            report["cardless_not_cancelled"] = sorted(sin_tarjeta - canceladas)
+            report["cardless_explained_by_cancellation"] = not (sin_tarjeta - canceladas)
+
+            report["payment_method_filter"] = probe_method_filter(credentials)
+            print(json.dumps(report, indent=2, ensure_ascii=False))
             return 0
 
         if args.command == "deposits":

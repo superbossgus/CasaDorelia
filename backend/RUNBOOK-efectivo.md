@@ -90,10 +90,14 @@ tamaño de todo el efectivo del dia, y eso acusa a alguien de algo que no paso.
 
 ## Lo que todavia falta
 
-- **El tablero de ventas aun no publica este efectivo**: sigue dibujando solo
-  tarjeta y rotulando "piso" incluso en dias que ya tengan corte. Hasta que eso
-  entre, el total completo del dia se lee en la pantalla del corte (por
-  sucursal).
+- ~~**El tablero de ventas aun no publica este efectivo.**~~ Entro en BOS-149:
+  `dashboard.py` recibe los cortes (`cash_cut.read_cuts`), publica el total del
+  dia por marca (`tarjeta + efectivo`) y calcula el rotulo de piso **por dia y
+  por marca** — un dia con corte deja de decirlo, uno sin corte lo sigue
+  diciendo. `publish_dashboard.py` los lee de la misma base sin bandera. Lo que
+  no cambia: la grafica se queda en tarjeta (una linea mitad tarjeta y mitad
+  total daria un escalon el dia del primer corte que se leeria como un salto de
+  venta), y el total del rango tampoco mezcla dias con y sin corte.
 - **El flujo end-to-end no esta probado con la app levantada** en este entorno
   (faltan `dotenv`/`motor` en el Python del sandbox y `node_modules` del
   frontend). Lo probado: el modulo puro (30 pruebas) y el indice unico contra un

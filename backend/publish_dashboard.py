@@ -73,6 +73,18 @@ caso de Tecnoparque. Asi que la razon no se queda en la consola: viaja en el
 modelo (`cierres_error`) y la pagina la publica junto a los ceros que la ventana
 iba a rotular.
 
+### El efectivo
+
+El tablero publicado dibujaba **solo** tarjeta y rotulaba piso todos los dias,
+incluidos los que ya tenian corte de caja. Desde BOS-149 esta generacion lee
+`cash_cuts` de la misma base y se las pasa a `build_model`, que calcula el
+rotulo por dia y por marca. No hay bandera que activarlo: el default es
+publicar el total, porque un piso sin rotular se lee como la venta del dia.
+
+Si la coleccion no responde, la razon viaja en el modelo (`cortes_error`) y la
+pagina la publica. Sin eso, "no hay corte capturado" y "no pude preguntar por
+el corte" se dibujarian iguales, y solo una de las dos se arregla capturando.
+
 ### Reutilizable para otra empresa del grupo
 
 Nada aqui conoce a Casa Dorelia: la base, el panel, las ventanas, la tarea y el
@@ -235,17 +247,45 @@ def generate(*, out: str, db: Optional[str], mongo_url: Optional[str],
     # degradar cuesta mas —vuelven los ceros falsos—, asi que la razon se dibuja
     # junto a los dias que la ventana iba a rotular, no solo en la consola.
     cierres, cierres_error = dashboard.load_cierres_degrading(cierres_path)
+    # Los cortes de caja son la unica fuente del efectivo (BOS-149): sin ellos
+    # el tablero publicado vuelve a rotular piso los 365 dias del eje, incluidos
+    # los que ya tienen corte. Se leen de la misma base, y si la coleccion no
+    # responde la razon se publica en la pagina en vez de quedarse en la
+    # consola: "falta el efectivo" y "no pude preguntar por el efectivo" se
+    # dibujarian iguales, y solo una de las dos se arregla capturando.
+    cortes, cortes_error = dashboard.load_cortes_degrading(mongo_url, db)
     sales = dashboard.open_sales_collection(mongo_url, db)
     model = dashboard.build_model(sales.find({}, {"_id": 0}), title=title,
                                   db_name=db or os.environ.get("DB_NAME"),
                                   apertura=apertura, apertura_error=apertura_error,
-                                  cierres=cierres, cierres_error=cierres_error)
+                                  cierres=cierres, cierres_error=cierres_error,
+                                  cortes=cortes, cortes_error=cortes_error)
     target = os.path.abspath(out)
     with open(target, "w", encoding="utf-8") as handle:
         handle.write(dashboard.render_html(model))
     model = dict(model)
     model["_out"] = target
     return model
+
+
+def _cash_scope(model: Mapping[str, Any]) -> str:
+    """Hasta donde llega el efectivo en este tablero, en una frase.
+
+    Sale de los conteos por dia-marca que calcula `build_model`, nunca de una
+    constante: el chip de la tarea se lee sin abrir el archivo, y un "sin
+    efectivo" escrito a mano habria sobrevivido al primer corte capturado.
+    """
+    cash = model["limits"]["cash"]
+    if not cash["consulted"]:
+        return "piso con tarjeta: no se leyeron los cortes de caja"
+    if cash["all_missing"]:
+        return "piso con tarjeta: no hay cortes de caja capturados"
+    if cash["days_missing"]:
+        return (f"total con efectivo en {cash['days_covered']} dia(s)-marca "
+                f"({cash['first_covered_day']} a {cash['last_covered_day']}), "
+                f"piso en los otros {cash['days_missing']}")
+    return (f"total con efectivo en los {cash['days_covered']} dia(s)-marca: "
+            "ya no es un piso")
 
 
 def summarize(model: Mapping[str, Any]) -> str:
@@ -261,10 +301,24 @@ def summarize(model: Mapping[str, Any]) -> str:
         f"Regenerado {model['generated_at_label']} con {model['rows_counted']} cobros",
         f"dias {model['days'][0]} a {model['days'][-1]}",
         f"por marca: {por_marca}",
-        "piso con tarjeta, sin efectivo y sin total consolidado",
+        # El alcance del efectivo se **calcula** del modelo. Antes esta linea
+        # decia "piso con tarjeta, sin efectivo" escrito a mano, asi que el chip
+        # de la tarea habria seguido diciendolo despues del primer corte
+        # capturado — y el chip es lo que se lee sin abrir el archivo.
+        _cash_scope(model),
+        "sin total consolidado entre marcas",
     ]
     if model.get("apertura_error"):
         partes.append(f"panel de apertura omitido ({model['apertura_error']})")
+    if model.get("cortes_error"):
+        partes.append(f"cortes de caja no leidos ({model['cortes_error']})")
+    cortes = model.get("cortes") or {}
+    contradicciones = (len(cortes.get("duplicates") or [])
+                       + len(cortes.get("double_counted") or [])
+                       + len(cortes.get("on_closed_days") or []))
+    if contradicciones:
+        partes.append(f"{contradicciones} corte(s) que el dato contradice: "
+                      "ver los controles en la pagina")
     cierres = model.get("cierres")
     if cierres and cierres["windows"]:
         # Los dias que NO son venta de cero van en el chip: el resumen se lee sin
@@ -336,6 +390,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if model.get("cierres_error"):
         print(f"  AVISO ventanas sin operacion omitidas: {model['cierres_error']}"
               "\n        los dias cerrados se publicaron como ceros medidos")
+    if model.get("cortes_error"):
+        print(f"  AVISO cortes de caja no leidos: {model['cortes_error']}"
+              "\n        el tablero publicado dice «sin corte» en cada dia sin "
+              "poder distinguirlo de «no pude preguntar»")
+    print(f"  efectivo: {_cash_scope(model)}")
     cierres = model.get("cierres")
     if cierres:
         for window in cierres["windows"]:

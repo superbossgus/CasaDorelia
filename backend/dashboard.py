@@ -24,8 +24,9 @@ en un comentario:
    acaba dibujado por el siguiente que toque la plantilla. Lo unico que cruza
    marcas es el conteo de renglones cargados, que no son pesos.
 2. **No llama "venta" al cobro con tarjeta.** La API de Clip no entrega
-   efectivo, asi que todo monto de aqui es **piso**. El rotulo va en el
-   encabezado y en cada tarjeta, no en una nota al pie.
+   efectivo, asi que un monto sin corte de caja es **piso**. El rotulo va en el
+   encabezado y en cada tarjeta, no en una nota al pie — y se calcula por dia,
+   no se escribe: ver `las dos direcciones del rotulo de piso`.
 3. **No dibuja utilidad cuando no la sabe.** Las ventas de Clip entran con
    `cost_known: false`, `cost_total: 0` y `profit: 0`. Graficar eso daria una
    utilidad de cero que se lee como "perdimos todo el margen". Si ninguna venta
@@ -63,6 +64,41 @@ Tres cosas que la ventana **no** puede hacer:
   entra al control.
 - **No puede solaparse con otra de la misma marca.** Dos ventanas encimadas son
   la huella de una edicion a medias.
+
+### Las dos direcciones del rotulo de piso
+
+El efectivo no viaja por la API de Clip: lo captura la sucursal al cerrar, en
+`cash_cut.py` (BOS-119). Mientras eso no se dibujaba aqui, el tablero rotulaba
+**piso** los 365 dias del eje — incluidos los que ya tenian corte — y ese rotulo
+estaba escrito, no calculado: la averia que este archivo evita en los otros
+cuatro puntos.
+
+Con los cortes en la mano, el rotulo se calcula **por dia y por marca**, y se
+mueve en las dos direcciones:
+
+- un dia **con corte** deja de ser piso: su total es `tarjeta + efectivo`;
+- un dia **sin corte** sigue siendolo, aunque el de al lado si tenga.
+
+Por dia *y por marca* porque un corte de Casa Dorelia no completa el dia de Le
+Pain Dore: son dos sucursales con dos cajones. Por eso el estado del efectivo
+vive en la celda de cada marca y no en la columna de estado del eje, que es una
+sola para las dos — la misma leccion que `closed_all` en `day_states`.
+
+Tres cosas que el corte **no** puede hacer:
+
+- **Un corte en cero no es un hueco.** `ventas_efectivo: 0.0` es un cero
+  *medido*: ese dia la sucursal abrio y no cobro efectivo, asi que el bruto con
+  tarjeta **ya es la venta completa**. Es justo lo que vuelve citable ese dia.
+- **No puede contar el mismo peso dos veces.** Si el dia ya trae un renglon de
+  venta con `payment_method: efectivo` (del punto de venta, no de Clip), ese
+  dinero ya esta en el bruto; sumarle el corte encima lo duplicaria. El bruto
+  gana y el dia sale a los controles del dato.
+- **No puede sumar dos veces el mismo turno.** Dos cortes de `(sucursal, dia,
+  turno)` son el mismo corte capturado dos veces; `cash_cut.duplicate_cuts` los
+  encuentra y salen a los controles en vez de inflar el dia.
+
+Un corte capturado tarde (`captured_late`) o corregido (`revisions`) se marca en
+su celda: ese numero se recordo o se corrigio, no se conto al cerrar el cajon.
 
 ### El dia en curso y el dia de ayer
 
@@ -109,6 +145,13 @@ republicacion.
     python backend/dashboard.py --db casa_dorelia --out C:/tmp/ventas.html
     python backend/dashboard.py --db casa_dorelia --apertura backend/apertura-sji.json
     python backend/dashboard.py --db casa_dorelia --cierres backend/cierres-casa-dorelia.json
+    python backend/dashboard.py --db casa_dorelia --sin-cortes   # solo tarjeta
+
+Los cortes de caja se leen de la misma base (`cash_cuts`) sin que haya que
+pedirlo: el default es publicar el total, y `--sin-cortes` es lo que hay que
+escribir para volver al piso. Al reves — tener que acordarse de una bandera para
+que entre el efectivo — es como un tablero termina publicando un piso que nadie
+rotulo.
 
 Solo lee: no escribe una sola linea en Mongo. Necesita `python` del sistema y
 `pymongo`; el resto es biblioteca estandar.
@@ -129,12 +172,13 @@ import os
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import brands as brands_mod
 import business_day
+import cash_cut
 
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 
@@ -475,6 +519,30 @@ def load_cierres_degrading(path: Optional[str]) -> tuple:
         return None, str(exc)
 
 
+def load_cortes_degrading(mongo_url: Optional[str] = None,
+                          db_name: Optional[str] = None) -> tuple:
+    """Los cortes de caja de la base, o la razon por la que no se pudieron leer.
+
+    Mismo trato que `load_apertura_degrading` y por la misma razon: en el
+    republicado automatico (BOS-144) tumbar el tablero porque la coleccion
+    `cash_cuts` no respondio dejaria publicada la venta de ayer.
+
+    Degradar aqui es **caro y silencioso**: sin cortes el tablero vuelve a
+    rotular piso todos los dias, que es exactamente lo que se ve cuando de
+    verdad no hay ningun corte capturado. Los dos casos se verian iguales, asi
+    que la razon viaja en el modelo (`cortes_error`) y la pagina la publica
+    junto a los dias que el corte iba a completar. "Falta el efectivo" y "no
+    pude preguntar por el efectivo" no son la misma frase.
+    """
+    try:
+        collection = cash_cut.open_collection(mongo_url, db_name)
+        return cash_cut.read_cuts(collection, limit=100000), None
+    except cash_cut.CashCutError as exc:
+        return None, str(exc)
+    except Exception as exc:  # pragma: no cover - red/driver/permisos
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _in_windows(day: str, windows: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
     """La ventana que cubre ese dia, o `None`. Las fechas ISO comparan como texto."""
     for window in windows:
@@ -489,7 +557,9 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 apertura: Optional[Mapping[str, Any]] = None,
                 apertura_error: Optional[str] = None,
                 cierres: Optional[Mapping[str, Any]] = None,
-                cierres_error: Optional[str] = None) -> Dict[str, Any]:
+                cierres_error: Optional[str] = None,
+                cortes: Optional[Iterable[Mapping[str, Any]]] = None,
+                cortes_error: Optional[str] = None) -> Dict[str, Any]:
     """Arma el modelo completo del tablero. Pura: recibe documentos, no una conexion.
 
     Devuelve ya listo lo que la pagina dibuja, incluida la lista de limites del
@@ -516,6 +586,19 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
     cobro, y el dia entra a los controles del dato como contradiccion. Igual una
     ventana cuya marca no aparece en la base — un slug mal escrito no hace nada,
     y "no hacer nada en silencio" es como se deja de notar que la ventana murio.
+
+    `cortes` son los documentos de `cash_cuts` (`cash_cut.read_cuts`). Son la
+    unica fuente del efectivo, porque la API de Clip no lo entrega. Con ellos el
+    rotulo de piso se calcula por dia y por marca en vez de escribirse para todo
+    el eje: ver la seccion del modulo. `None` no es lo mismo que `[]` —
+    `None` es "no se preguntaron los cortes" y deja el tablero como estaba,
+    mientras que `[]` es "se preguntaron y no hay ninguno", que si rotula cada
+    dia como `sin corte`. Un tablero que no pregunto y uno que pregunto y no
+    encontro nada tienen que verse distinto.
+
+    `cortes_error` es el caso de en medio, igual que `apertura_error`: la
+    coleccion no respondio y la razon se publica, porque "falta el efectivo" y
+    "no pude preguntar por el efectivo" se dibujarian iguales.
     """
     rows = list(sales)
     now = now or datetime.now(timezone.utc)
@@ -548,6 +631,12 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         lambda: {"gross": 0.0, "tickets": 0}))
     sources: Dict[str, int] = defaultdict(int)
     undated = 0
+    # `(marca, dia)` que ya traen efectivo **dentro del bruto**, por un renglon
+    # de venta con `payment_method: efectivo` (punto de venta, no Clip). Es lo
+    # que impide sumarle el corte encima y contar el mismo peso dos veces. Hoy
+    # esta vacio —la sucursal no usa el punto de venta— y por eso mismo tiene
+    # que estar: el dia que se use, nadie se va a acordar de esta resta.
+    pos_cash: Dict[Tuple[str, str], Dict[str, float]] = {}
 
     for sale in rows:
         day = business_day.sale_business_date(sale)
@@ -580,6 +669,10 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
             itemized += 1
 
         total = float(sale.get("total") or 0.0)
+        if method == cash_cut.METHOD_CASH:
+            pos = pos_cash.setdefault((slug, day), {"gross": 0.0, "tickets": 0})
+            pos["gross"] += total
+            pos["tickets"] += 1
         method_bucket = per_method[slug][method]
         method_bucket["gross"] += total
         method_bucket["tickets"] += 1
@@ -634,6 +727,35 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                         now_minutes=now_local.hour * 60 + now_local.minute,
                         has_sales=has_sales, closed_all=closed_all)
 
+    # El efectivo de los cortes, agregado por marca y por dia. La agregacion no
+    # se reescribe aqui: `cash_by_day` y `duplicate_cuts` ya estan probados en
+    # `test_cash_cut.py`, y dos implementaciones del mismo reparto de dinero es
+    # como una se queda atras.
+    cuts = None if cortes is None else list(cortes)
+    cash_days: Dict[str, Dict[str, Dict[str, Any]]] = (
+        cash_cut.cash_by_day(cuts) if cuts else {})
+    # Lo que `cash_by_day` no lleva, porque no es dinero: si ese numero se
+    # recordo tarde o se corrigio. Va por `(marca, dia)` para que la celda lo
+    # pueda marcar — un total citable y un total recordado no se leen igual.
+    cut_marks: Dict[Tuple[str, str], Dict[str, bool]] = {}
+    for cut in (cuts or []):
+        cut_day = str(cut.get("business_date") or "")[:10]
+        if not cut_day:
+            continue
+        mark = cut_marks.setdefault(
+            (cut.get("brand") or brands_mod.UNKNOWN_BRAND, cut_day),
+            {"late": False, "revised": False})
+        if cut.get("captured_late"):
+            mark["late"] = True
+        if cut.get("revisions"):
+            mark["revised"] = True
+
+    # Las tres formas en que un corte puede estar mal, y ninguna se ve en la
+    # grafica. Se llenan dentro del recorrido por marca, abajo.
+    cash_double: List[Dict[str, Any]] = []   # el peso ya estaba en el bruto
+    cash_on_closed: List[Dict[str, Any]] = []  # corte en un dia declarado cerrado
+    cash_duplicates = cash_cut.duplicate_cuts(cuts) if cuts else []
+
     # Dias declarados sin operacion que si traen cobro. El cobro gana —este
     # tablero no puede borrar venta con un archivo de configuracion— y la
     # contradiccion sale a los controles del dato.
@@ -645,12 +767,67 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
         first_day, last_day = active[0], active[-1]
         brand_windows = windows_by_brand[slug]
 
+        brand_cash = cash_days.get(slug) or {}
+
+        def attach_cash(point: Dict[str, Any], day: str,
+                        closed: Optional[Mapping[str, Any]] = None,
+                        slug: str = slug,
+                        first_day: str = first_day,
+                        brand_cash: Mapping[str, Any] = brand_cash) -> Dict[str, Any]:
+            """Pega el efectivo del corte de ESE dia y marca su estado.
+
+            Los parametros con default amarran la marca del ciclo: sin eso, la
+            funcion leeria la ultima marca para todas.
+            """
+            if cuts is None or day < first_day:
+                # Nadie pregunto por los cortes, o el dia es de antes de que la
+                # marca existiera: no hay cajon que contar ni estado que decir.
+                return point
+            cut = brand_cash.get(day)
+            if cut is None:
+                # Hueco, nunca cero: un dia sin corte no es un dia sin
+                # efectivo. Y su bruto sigue siendo piso, aunque el de al lado
+                # ya tenga corte.
+                point["cash"] = None
+                point["cash_state"] = "sin_corte"
+                point["gross_total"] = None
+                return point
+            cash = _round2(float(cut["cash"]))
+            point["cash"] = cash
+            point["cash_state"] = "con_corte"
+            point["cash_cuts"] = int(cut["cuts"])
+            mark = cut_marks.get((slug, day)) or {}
+            if mark.get("late"):
+                point["cash_late"] = True
+            if mark.get("revised"):
+                point["cash_revised"] = True
+            pos = pos_cash.get((slug, day))
+            if pos:
+                # El bruto ya trae efectivo (un renglon del punto de venta):
+                # sumarle el corte encima contaria el mismo peso dos veces.
+                # Gana el bruto, que es el que tiene el cobro renglon por
+                # renglon, y la contradiccion sale a los controles del dato.
+                cash_double.append({"brand": slug, "date": day, "cash": cash,
+                                    "pos_gross": _round2(pos["gross"]),
+                                    "pos_tickets": int(pos["tickets"])})
+                point["cash_state"] = "doble"
+                point["gross_total"] = None
+                return point
+            if closed is not None:
+                cash_on_closed.append({
+                    "brand": slug, "date": day, "cash": cash,
+                    "window": f"{closed['from']}..{closed['to']}"})
+            point["gross_total"] = (None if point["gross"] is None
+                                    else _round2(point["gross"] + cash))
+            return point
+
         series: List[Dict[str, Any]] = []
         for day in axis:
             if day < first_day:
                 # Antes del primer dia de la marca no hay dato: hueco, no cero.
-                series.append({"date": day, "gross": None, "tickets": None,
-                               "avg_ticket": None})
+                series.append(attach_cash({"date": day, "gross": None,
+                                           "tickets": None,
+                                           "avg_ticket": None}, day))
                 continue
             bucket = day_rows.get(day)
             closed = _in_windows(day, brand_windows) if day < today else None
@@ -658,8 +835,10 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 # Declarado sin operacion: hueco rotulado, no un cero medido.
                 # `closed` viaja en el punto para que la celda pueda decir por
                 # que falta; un hueco callado se lee como "no hay dato todavia".
-                series.append({"date": day, "gross": None, "tickets": None,
-                               "avg_ticket": None, "closed": closed["label"]})
+                series.append(attach_cash({"date": day, "gross": None,
+                                           "tickets": None, "avg_ticket": None,
+                                           "closed": closed["label"]},
+                                          day, closed))
                 continue
             if bucket is not None and closed is not None:
                 conflicts.append({
@@ -675,21 +854,32 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 # correcto es que no haya nada. Va como hueco; la tabla lo dice
                 # con todas sus letras ("en curso"), asi que no se esconde.
                 zero = None if day >= today else 0.0
-                series.append({"date": day, "gross": zero,
-                               "tickets": None if zero is None else 0,
-                               "avg_ticket": None})
+                series.append(attach_cash({"date": day, "gross": zero,
+                                           "tickets": None if zero is None else 0,
+                                           "avg_ticket": None}, day))
                 continue
             tickets = int(bucket["tickets"])
             gross = _round2(bucket["gross"])
-            series.append({
+            series.append(attach_cash({
                 "date": day,
                 "gross": gross,
                 "tickets": tickets,
                 "avg_ticket": _round2(gross / tickets) if tickets else None,
-            })
+            }, day))
 
         total_gross = _round2(sum(float(b["gross"]) for b in day_rows.values()))
         total_tickets = int(sum(int(b["tickets"]) for b in day_rows.values()))
+
+        # El total de los dias **con corte**, y solo de esos. Sumar el efectivo
+        # que haya contra el bruto de todo el rango daria una cifra mitad
+        # completa y mitad piso: la peor de las tres, porque no se puede citar
+        # ni como una cosa ni como la otra y nada en la pagina lo diria. Esto si
+        # se puede citar: "los N dias con corte vendieron X".
+        covered = [p for p in series if p.get("cash_state") == "con_corte"
+                   and p.get("gross_total") is not None]
+        covered_cash = _round2(sum(float(p["cash"]) for p in covered))
+        covered_gross = _round2(sum(float(p["gross"]) for p in covered))
+        covered_tickets = int(sum(int(p["tickets"] or 0) for p in covered))
         hours = [
             {"hour": hour,
              "tickets": int(per_hour[slug][hour]["tickets"]),
@@ -711,6 +901,18 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
                 "gross": total_gross,
                 "tickets": total_tickets,
                 "avg_ticket": _round2(total_gross / total_tickets) if total_tickets else None,
+                # El unico total citable como venta y no como piso: los dias de
+                # ESTA marca que si tienen corte. `days: 0` es lo normal
+                # mientras no haya cortes, y se lee como lo que es.
+                "con_corte": {
+                    "days": len(covered),
+                    "gross": covered_gross,
+                    "cash": covered_cash,
+                    "total": _round2(covered_gross + covered_cash),
+                    "tickets": covered_tickets,
+                    "first_day": covered[0]["date"] if covered else None,
+                    "last_day": covered[-1]["date"] if covered else None,
+                },
             },
             # Con que se cobro, en pesos de ESTA marca. Es lo que separa un vale
             # de una tarjeta y lo que deja ver, el dia que entre, el efectivo.
@@ -744,9 +946,36 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
          "count": len(conflicts) + len(unknown_windows),
          "fix": "revisar las fechas y los slugs del archivo de --cierres contra "
                 "la base: el cobro siempre gana"},
+        # Las tres formas en que un corte puede mover dinero sin que se vea en
+        # la grafica: sumar el mismo turno dos veces, sumarse encima de un
+        # efectivo que ya estaba en el bruto, y aparecer en un dia que se
+        # declaro sin operacion. Ninguna se nota mirando la linea.
+        {"id": "cortes", "label": "Cortes de caja que el dato contradice",
+         "count": len(cash_duplicates) + len(cash_double) + len(cash_on_closed),
+         "fix": "revisar el indice unico de `cash_cuts` y los dias que salen "
+                "listados en el modelo (`cortes`)"},
     ]
     for check in checks:
         check["status"] = "good" if check["count"] == 0 else "critical"
+
+    # El rotulo de piso, **contado de los dias-marca** que ya se armaron arriba y
+    # no escrito aparte. Contarlo de la serie es lo que garantiza que el
+    # encabezado no pueda decir una cosa distinta de las celdas de la tabla: si
+    # manana cambia la regla de una celda, este conteo cambia con ella.
+    cash_covered = 0
+    cash_missing = 0
+    cash_conflict = 0
+    covered_days_seen: List[str] = []
+    for brand_model in brand_models:
+        for point in brand_model["series"]:
+            state = point.get("cash_state")
+            if state == "sin_corte":
+                cash_missing += 1
+            elif state == "doble":
+                cash_conflict += 1
+            elif state == "con_corte":
+                cash_covered += 1
+                covered_days_seen.append(point["date"])
 
     counted = len(rows) - undated
     return {
@@ -780,15 +1009,50 @@ def build_model(sales: Iterable[Mapping[str, Any]], *, title: str,
             "unknown_brands": unknown_windows,
         } if cierres else None,
         "cierres_error": cierres_error if cierres is None else None,
+        # Los cortes de caja, con lo que el dato les contradice. `None` es "no se
+        # preguntaron"; un bloque con `cuts: 0` es "se preguntaron y no hay
+        # ninguno", y los dos se dibujan distinto. No hay un monto aqui: el
+        # efectivo vive en la celda de cada marca, y un total de efectivo de las
+        # dos cruzaria los dos repartos igual que un total de venta.
+        "cortes": {
+            "cuts": len(cuts),
+            "late": sum(1 for c in cuts if c.get("captured_late")),
+            "revised": sum(1 for c in cuts if c.get("revisions")),
+            "duplicates": cash_duplicates,
+            "double_counted": cash_double,
+            "on_closed_days": cash_on_closed,
+        } if cuts is not None else None,
+        "cortes_error": cortes_error if cuts is None else None,
         "quality": {"checks": checks},
         "limits": {
             # Calculados, no escritos a mano: el dia que el dato cambie, el
             # rotulo cambia con el.
-            # Falta el efectivo mientras no haya **un solo** renglon de
-            # efectivo. Antes esto se preguntaba al reves ("el unico metodo es
-            # tarjeta"), y eso convertia cualquier metodo nuevo — vales, por
-            # ejemplo — en un "ya entra el efectivo" que nadie escribio.
-            "cash_excluded": "efectivo" not in payment_methods,
+            # El estado del efectivo, **contado por dia-marca**. Dejo de ser un
+            # `cash_excluded` global en BOS-149: un solo booleano para todo el
+            # eje rotulaba piso los dias que ya tenian corte, y el dia que
+            # entrara el primer corte habria dejado de rotular piso los otros
+            # 364. El rotulo tiene que moverse en las dos direcciones, y por eso
+            # aqui solo viven conteos: la frase la arma la pagina con ellos.
+            "cash": {
+                # "No se preguntaron los cortes" no es "no hay cortes".
+                "consulted": cuts is not None,
+                "days_covered": cash_covered,
+                "days_missing": cash_missing,
+                "days_conflict": cash_conflict,
+                "all_missing": cash_covered == 0,
+                "none_missing": cash_covered > 0 and cash_missing == 0,
+                "first_covered_day": min(covered_days_seen) if covered_days_seen else None,
+                "last_covered_day": max(covered_days_seen) if covered_days_seen else None,
+                "cuts": len(cuts or []),
+                "late_cuts": sum(1 for c in (cuts or []) if c.get("captured_late")),
+                "revised_cuts": sum(1 for c in (cuts or []) if c.get("revisions")),
+                "duplicate_cuts": len(cash_duplicates),
+                # Renglones de venta que ya traian el efectivo **dentro** del
+                # bruto (punto de venta, no Clip). Antes esto era todo el
+                # semaforo del efectivo; hoy es un conteo mas, porque el
+                # efectivo de verdad llega por el corte.
+                "pos_rows": payment_methods.get(cash_cut.METHOD_CASH, 0),
+            },
             # Conteo de renglones, no pesos: un total en dinero aqui cruzaria
             # las dos marcas. Los pesos por metodo viven en cada marca
             # (`brands[].by_method`).
@@ -879,6 +1143,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--cierres-optional", action="store_true",
                         help="si el archivo de cierres no cuadra, publicar el tablero "
                              "sin ventanas (y con la razon a la vista) en vez de fallar")
+    parser.add_argument("--sin-cortes", dest="sin_cortes", action="store_true",
+                        help="no leer `cash_cuts`: el tablero sale solo con lo "
+                             "que cobro la terminal y rotula piso cada dia. El "
+                             "default es leerlos, porque el efectivo no viaja "
+                             "por la API de Clip y un piso sin rotular se lee "
+                             "como la venta del dia")
     parser.add_argument("--json", action="store_true",
                         help="imprime el modelo en JSON en vez de escribir el HTML")
 
@@ -895,12 +1165,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             cierres = load_cierres(args.cierres) if args.cierres else None
             cierres_error = None
+        if args.sin_cortes:
+            cortes, cortes_error = None, None
+        else:
+            cortes, cortes_error = load_cortes_degrading(args.mongo_url, args.db)
         sales = open_sales_collection(args.mongo_url, args.db)
         db_name = args.db or os.environ.get("DB_NAME")
         model = build_model(sales.find({}, {"_id": 0}), title=args.title,
                             db_name=db_name, apertura=apertura,
                             apertura_error=apertura_error, cierres=cierres,
-                            cierres_error=cierres_error)
+                            cierres_error=cierres_error, cortes=cortes,
+                            cortes_error=cortes_error)
     except DashboardError as exc:
         print(f"ERROR: {exc}")
         return 1
@@ -908,6 +1183,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"AVISO panel de apertura omitido: {apertura_error}")
     if cierres_error:
         print(f"AVISO ventanas sin operacion omitidas: {cierres_error}")
+    if cortes_error:
+        print(f"AVISO cortes de caja no leidos: {cortes_error}"
+              "\n        el tablero rotulo piso cada dia sin poder distinguir "
+              "«no hay corte» de «no pude preguntar»")
 
     if args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -925,9 +1204,39 @@ def main(argv: Optional[List[str]] = None) -> int:
               f" en {brand['totals']['tickets']} cobros")
         for method, mix in brand["by_method"].items():
             print(f"    {method}: ${mix['gross']:,.2f} en {mix['tickets']} cobros")
-    if model["limits"]["cash_excluded"]:
-        print("  Piso, no venta del dia: el efectivo de la app de Clip no viaja "
-              "por esta API.")
+        con_corte = brand["totals"]["con_corte"]
+        if con_corte["days"]:
+            print(f"    con corte ({con_corte['days']} dia(s), "
+                  f"{con_corte['first_day']} a {con_corte['last_day']}): "
+                  f"${con_corte['total']:,.2f} = tarjeta ${con_corte['gross']:,.2f}"
+                  f" + efectivo ${con_corte['cash']:,.2f}")
+    cash = model["limits"]["cash"]
+    if not cash["consulted"]:
+        print("  Piso, no venta del dia: no se leyeron los cortes de caja "
+              "(--sin-cortes).")
+    elif cash["all_missing"]:
+        print("  Piso, no venta del dia: no hay ni un corte capturado, y el "
+              "efectivo de la app de Clip no viaja por esta API.")
+    elif cash["days_missing"]:
+        print(f"  Piso en {cash['days_missing']} dia(s)-marca sin corte; "
+              f"{cash['days_covered']} ya traen el total.")
+    else:
+        print(f"  Los {cash['days_covered']} dia(s)-marca tienen corte: el "
+              "total de cada uno es tarjeta + efectivo.")
+    cortes_model = model.get("cortes")
+    if cortes_model:
+        for dup in cortes_model["duplicates"]:
+            print(f"  AVISO {dup['cuts']} cortes de ({dup['cafeteria_id']}, "
+                  f"{dup['business_date']}, {dup['turno']}): eso duplica venta, "
+                  "revisa el indice unico de `cash_cuts`")
+        for row in cortes_model["double_counted"]:
+            print(f"  AVISO el {row['date']} de {row['brand']} ya trae "
+                  f"${row['pos_gross']:,.2f} de efectivo en el bruto: el corte "
+                  f"de ${row['cash']:,.2f} NO se sumo encima")
+        for row in cortes_model["on_closed_days"]:
+            print(f"  AVISO el {row['date']} de {row['brand']} esta declarado "
+                  f"sin operacion ({row['window']}) pero tiene corte por "
+                  f"${row['cash']:,.2f}")
     cierres_model = model.get("cierres")
     if cierres_model:
         for window in cierres_model["windows"]:
@@ -1103,6 +1412,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
     color: var(--text-secondary); }
   .state .ico { font-size: 11px; line-height: 1; }
   .nodata { color: var(--text-muted); }
+  /* Un monto al que le falta el efectivo del dia. El subrayado punteado existe
+     para que el numero no se pueda leer como el total: en una columna de
+     cifras, la de un dia con corte y la de uno sin corte son la misma tinta. */
+  .floor { border-bottom: 1px dotted var(--text-muted); }
+  .floor-mark { color: var(--text-muted); font-size: 11px; }
 
   .checks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
   .check { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; }
@@ -1278,6 +1592,18 @@ _TEMPLATE = r"""<!DOCTYPE html>
     sin_operacion: { ico: "\u2298", text: "sin operacion" }
   };
 
+  // El estado del **efectivo** de ese dia, por marca. Es una columna aparte de
+  // la de arriba a proposito: el estado del dia es uno para todo el eje, y un
+  // corte de Casa Dorelia no completa el dia de Le Pain Dore. Igual que STATES,
+  // nombra el hueco con una palabra en vez de dibujar un cero.
+  var CASH = {
+    con_corte: { text: "con corte" },
+    sin_corte: { text: "sin corte" },
+    // El efectivo ya venia dentro del bruto (un renglon del punto de venta), asi
+    // que el corte no se sumo encima: habria contado el mismo peso dos veces.
+    doble:     { text: "ya en el bruto" }
+  };
+
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) { n.className = cls; }
@@ -1328,7 +1654,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     brand.series.forEach(function (p) { byDay[p.date] = p; });
     return days.map(function (d) {
       return byDay[d] ||
-        { date: d, gross: null, tickets: null, avg_ticket: null, closed: null };
+        { date: d, gross: null, tickets: null, avg_ticket: null, closed: null,
+          cash: null, cash_state: null, gross_total: null };
     });
   }
 
@@ -1736,14 +2063,32 @@ _TEMPLATE = r"""<!DOCTYPE html>
       tile.appendChild(el("div", "label",
         "Ultimo dia " + (M.day_states[cur.date] === "no_confirmado" ? "capturado" : "cerrado") +
         " · " + longDay(cur.date)));
-      tile.appendChild(el("div", "value", MXN0.format(cur.gross)));
+      // El numero grande es el total del dia cuando hay corte, y la tarjeta
+      // sola cuando no. Lo que nunca pasa es que cambie de significado sin
+      // decirlo: el renglon de abajo dice de que esta hecho, porque el dia que
+      // entre el primer corte el numero sube y se leeria como un salto de venta.
+      var completo = cur.gross_total !== null && cur.gross_total !== undefined;
+      tile.appendChild(el("div", "value",
+        MXN0.format(completo ? cur.gross_total : cur.gross)));
       tile.appendChild(el("div", "meta",
         NUM.format(cur.tickets) + " cobros · ticket " + money(cur.avg_ticket) +
         " · " + st.text));
+      if (M.limits.cash.consulted) {
+        tile.appendChild(el("div", "meta", completo
+          ? "total del dia: tarjeta " + money(cur.gross) + " + efectivo " +
+            money(cur.cash) + " del corte"
+          : (cur.cash_state === "doble"
+              ? "el efectivo de ese dia ya venia en el bruto: el corte no se sumo"
+              : "piso: ese dia no tiene corte, asi que le falta el efectivo")));
+      }
       if (prev) {
+        // La comparacion se queda en tarjeta contra tarjeta. Un dia con corte
+        // contra uno sin corte no es una subida de venta, es una subida de lo
+        // que se alcanza a medir, y seria el error mas caro de esta tarjeta.
         var delta = prev.gross > 0 ? (cur.gross - prev.gross) / prev.gross : null;
+        var base = M.limits.cash.days_covered ? "% en tarjeta vs " : "% vs ";
         var txt = delta === null ? "sin base de comparacion"
-          : (delta >= 0 ? "+" : "") + (delta * 100).toFixed(1) + "% vs " + shortDay(prev.date);
+          : (delta >= 0 ? "+" : "") + (delta * 100).toFixed(1) + base + shortDay(prev.date);
         // Un dia con mas o menos horas abiertas no es una caida: el ticket
         // promedio es lo que si se compara. Va junto al delta, no aparte.
         var tdelta = (prev.avg_ticket && cur.avg_ticket)
@@ -1765,9 +2110,18 @@ _TEMPLATE = r"""<!DOCTYPE html>
     var host = document.getElementById("day-table");
     host.textContent = "";
     var table = el("table");
+    // Con cortes en la base la primera columna de cada marca deja de ser "el
+    // bruto con tarjeta" y pasa a ser "el total del dia", que en los dias sin
+    // corte sigue siendo solo tarjeta. Esa diferencia es la que la columna de
+    // efectivo nombra dia por dia, en vez de un rotulo arriba para todos.
+    var cashCol = M.limits.cash.consulted;
     var cap = el("caption",
       null,
-      "Bruto con tarjeta y numero de cobros por dia de operacion (UTC-6). " +
+      (cashCol
+        ? "Total del dia (tarjeta + efectivo del corte) y numero de cobros con " +
+          "tarjeta, por dia de operacion (UTC-6). La cifra subrayada con puntos " +
+          "es un piso: ese dia no tiene corte, asi que le falta el efectivo. "
+        : "Bruto con tarjeta y numero de cobros por dia de operacion (UTC-6). ") +
       "«0» es un dia que paso sin cobro con tarjeta; «—» es que no hay dato " +
       "(la marca no operaba aun, o el dia todavia no pasa); «sin operacion» es " +
       "un dia declarado cerrado, que no es lo mismo que un cero.");
@@ -1778,7 +2132,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     hr.appendChild(el("th", null, "Dia"));
     hr.appendChild(el("th", null, "Estado"));
     brands.forEach(function (b) {
-      hr.appendChild(el("th", null, b.name + " · bruto"));
+      hr.appendChild(el("th", null, b.name + (cashCol ? " · total" : " · bruto")));
+      if (cashCol) { hr.appendChild(el("th", null, "efectivo")); }
       hr.appendChild(el("th", null, "cobros"));
       hr.appendChild(el("th", null, "ticket"));
     });
@@ -1805,9 +2160,36 @@ _TEMPLATE = r"""<!DOCTYPE html>
         // dia que no ha pasado, el cierre declarado, y el "no hay dato" de antes
         // de que la marca existiera. Un «—» para los tres los hace iguales.
         var hueco = p.closed ? p.closed : (running ? "aun sin cobro" : null);
-        var c1 = el("td", p.gross === null ? "nodata" : null,
-          p.gross === null && hueco ? hueco : money(p.gross));
+        // El total del dia cuando el corte ya entro; la tarjeta sola cuando no,
+        // y entonces marcada como piso. El numero nunca se infla: lo que cambia
+        // es de que esta hecho, y eso se lee en la celda de al lado.
+        var completo = p.gross_total !== null && p.gross_total !== undefined;
+        var shown = completo ? p.gross_total : p.gross;
+        var floor = cashCol && !completo && p.gross !== null &&
+          p.cash_state === "sin_corte";
+        var c1 = el("td", p.gross === null ? "nodata" : (floor ? "floor" : null),
+          p.gross === null && hueco ? hueco : money(shown));
+        if (floor) { c1.title = "piso: falta el efectivo de ese dia (sin corte)"; }
         tr.appendChild(c1);
+        if (cashCol) {
+          // Hueco, no cero: un dia sin corte no es un dia sin efectivo. Y un
+          // corte en cero si es un cero medido, que es lo que vuelve citable el
+          // total de ese dia — por eso se dibuja la cifra, aunque sea 0.00.
+          var lab = CASH[p.cash_state];
+          var cd = el("td", p.cash === null ? "nodata" : null,
+            p.cash === null ? (lab ? lab.text : "—") : money(p.cash));
+          if (p.cash !== null && (p.cash_late || p.cash_revised)) {
+            // Ese numero se recordo o se corrigio: no se conto al cerrar el
+            // cajon. Va pegado a la cifra, no en una nota al pie.
+            cd.appendChild(el("span", "floor-mark",
+              p.cash_late && p.cash_revised ? " tarde, corregido"
+                : (p.cash_late ? " tarde" : " corregido")));
+          }
+          if (p.cash !== null && p.cash_state === "doble") {
+            cd.appendChild(el("span", "floor-mark", " ya en el bruto"));
+          }
+          tr.appendChild(cd);
+        }
         tr.appendChild(el("td", p.tickets === null ? "nodata" : null,
           p.tickets === null ? "—" : NUM.format(p.tickets)));
         tr.appendChild(el("td", p.avg_ticket === null ? "nodata" : null,
@@ -1819,14 +2201,25 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
     var tfoot = el("tfoot");
     var fr = el("tr");
-    fr.appendChild(el("td", null, "Total del rango"));
+    // El total del rango se queda en **tarjeta**, a proposito, y lo dice. Sumar
+    // el efectivo que haya contra el bruto de todos los dias daria una cifra
+    // mitad completa y mitad piso: no se podria citar ni como una cosa ni como
+    // la otra, y la columna no tiene donde decirlo. El total que si se puede
+    // citar —los dias con corte— va en la tarjeta de cada marca.
+    fr.appendChild(el("td", null, cashCol ? "Total del rango (tarjeta)"
+                                          : "Total del rango"));
     fr.appendChild(el("td", null, ""));
     sliced.forEach(function (pts) {
-      var g = 0, n = 0;
+      var g = 0, n = 0, c = 0, dias = 0;
       pts.forEach(function (p) {
         if (p.gross !== null) { g += p.gross; n += p.tickets; }
+        if (p.cash !== null && p.cash_state === "con_corte") { c += p.cash; dias++; }
       });
       fr.appendChild(el("td", null, MXN.format(g)));
+      if (cashCol) {
+        fr.appendChild(el("td", dias ? null : "nodata",
+          dias ? MXN.format(c) + " (" + NUM.format(dias) + " d)" : "sin corte"));
+      }
       fr.appendChild(el("td", null, NUM.format(n)));
       fr.appendChild(el("td", null, n ? MXN.format(g / n) : "—"));
     });
@@ -1969,16 +2362,83 @@ _TEMPLATE = r"""<!DOCTYPE html>
       }).join(", ");
       return b.name + ": " + (parts || "sin cobros");
     }).join(" · ");
-    if (L.cash_excluded) {
+    // El rotulo del efectivo sale de los conteos por dia-marca, no de un
+    // booleano para todo el eje. Son cuatro frases porque son cuatro estados
+    // distintos del dato, y el dia que cambie el conteo cambia la frase sola.
+    var CH = L.cash;
+    if (!CH.consulted) {
+      items.push(["No dice la venta del dia: no se leyeron los cortes de caja. ",
+        "Lo cargado es lo que cobro la terminal de Clip: " + mix + ". El efectivo " +
+        "que la app de Clip registra aparte NO viaja por esta API, y este tablero " +
+        "se genero sin preguntarle a `cash_cuts`, asi que cada monto es un piso."]);
+    } else if (CH.all_missing) {
       items.push(["No dice la venta del dia, y el faltante no es chico. ",
         "Lo cargado es lo que cobro la terminal de Clip: " + mix + ". El efectivo " +
         "que la app de Clip registra aparte NO viaja por esta API: son entre 6 y 20 " +
         "cobros al dia por sucursal que no estan aqui (confirmado con Gustavo el " +
-        "04/10). Cada monto es un piso, y la venta real es ese numero mas la caja."]);
+        "04/10). No hay ni un corte de caja capturado todavia, asi que cada monto " +
+        "es un piso y la venta real es ese numero mas la caja."]);
+    } else if (CH.days_missing) {
+      items.push(["El total es completo en los dias con corte, y piso en los demas. ",
+        NUM.format(CH.days_covered) + " dia(s)-marca tienen corte de caja (del " +
+        shortDay(CH.first_covered_day) + " al " + shortDay(CH.last_covered_day) +
+        ") y su total es tarjeta + efectivo contado. Los otros " +
+        NUM.format(CH.days_missing) + " siguen siendo piso, y la tabla lo dice " +
+        "dia por dia («sin corte», y la cifra subrayada con puntos). Por eso el " +
+        "total del rango se queda en tarjeta: una suma mitad completa y mitad " +
+        "piso no se puede citar."]);
     } else {
-      items.push(["Ya entra efectivo en el total. ",
-        mix + ". Deja de ser un piso solo si el efectivo del dia entro completo; " +
-        "un efectivo a medias es peor que ninguno, porque se lee como venta."]);
+      items.push(["Todos los dias tienen corte: el total es la venta, no un piso. ",
+        NUM.format(CH.days_covered) + " dia(s)-marca con corte de caja. " + mix +
+        ", mas el efectivo contado de cada dia. Un dia que pierda su corte vuelve " +
+        "a decir «sin corte» solo, sin que nadie edite este texto."]);
+    }
+    if (CH.late_cuts || CH.revised_cuts) {
+      items.push(["Hay efectivo que se recordo o se corrigio. ",
+        (CH.late_cuts ? NUM.format(CH.late_cuts) + " corte(s) se capturaron " +
+          "dias despues del cierre, asi que ese numero salio de la memoria y no " +
+          "del cajon. " : "") +
+        (CH.revised_cuts ? NUM.format(CH.revised_cuts) + " corte(s) se " +
+          "corrigieron despues de guardarse (el valor anterior y la razon quedan " +
+          "en el documento). " : "") +
+        "Las celdas afectadas van marcadas; cuenta igual que el resto, pero no se " +
+        "cita igual."]);
+    }
+    var CO = M.cortes;
+    if (CO && CO.duplicates.length) {
+      items.push(["Un turno tiene mas de un corte, y eso duplica venta. ",
+        CO.duplicates.map(function (d) {
+          return d.cafeteria_id + " " + shortDay(d.business_date) + " turno " +
+            d.turno + ": " + NUM.format(d.cuts) + " cortes";
+        }).join("; ") + ". El indice unico de `cash_cuts` deberia hacerlo " +
+        "imposible, asi que esto es una base sin indice o una carga a mano."]);
+    }
+    if (CO && CO.double_counted.length) {
+      items.push(["Un dia trae el efectivo dos veces, y solo se conto una. ",
+        CO.double_counted.map(function (d) {
+          var b = M.brands.filter(function (x) { return x.brand === d.brand; })[0];
+          return shortDay(d.date) + " " + (b ? b.name : d.brand) + ": el bruto ya " +
+            "trae " + money(d.pos_gross) + " de efectivo en " +
+            NUM.format(d.pos_tickets) + " cobro(s), y el corte dice " + money(d.cash);
+        }).join("; ") + ". Gana el bruto, que tiene el cobro renglon por renglon: " +
+        "el corte NO se sumo encima. Hay que decidir cual de las dos capturas es " +
+        "la buena antes de leer esos dias."]);
+    }
+    if (CO && CO.on_closed_days.length) {
+      items.push(["Hay corte de caja en un dia declarado sin operacion. ",
+        CO.on_closed_days.map(function (d) {
+          var b = M.brands.filter(function (x) { return x.brand === d.brand; })[0];
+          return shortDay(d.date) + " " + (b ? b.name : d.brand) + ": " +
+            money(d.cash) + " dentro de " + d.window;
+        }).join("; ") + ". Las dos cosas no pueden ser ciertas: o la sucursal si " +
+        "opero, o el corte es de otro dia. El efectivo se dibuja igual — un " +
+        "archivo de configuracion no borra dinero."]);
+    }
+    if (M.cortes_error) {
+      items.push(["No se pudieron leer los cortes de caja. ",
+        "Los dias de abajo dicen «sin corte», pero eso no quiere decir que no " +
+        "haya: quiere decir que no se pudo preguntar. Falta por esto: " +
+        M.cortes_error]);
     }
     if (L.payment_methods["otro"]) {
       items.push(["Hay cobros sin metodo identificado. ",
@@ -2101,22 +2561,53 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
     renderAge();
 
+    // El rotulo de arriba de todo tambien se calcula de los conteos por
+    // dia-marca. Un "no es la venta del dia" escrito para todo el eje seguia
+    // siendo falso en los dias que ya tenian corte, y nadie lo habria movido.
+    var CH = M.limits.cash;
     var note = document.getElementById("floor-note");
     note.textContent = "";
-    note.appendChild(el("strong", null,
-      M.limits.cash_excluded
-        ? "Todo lo de aqui lo cobro la terminal de Clip, no es la venta del dia. "
-        : "Esto ya incluye efectivo: leelo con el desglose por metodo. "));
+    if (!CH.consulted || CH.all_missing) {
+      note.appendChild(el("strong", null,
+        "Todo lo de aqui lo cobro la terminal de Clip, no es la venta del dia. "));
+      note.appendChild(el("span", null,
+        "Tarjeta y vales si; el efectivo que la app de Clip registra aparte no " +
+        "viaja por esta API, y " + (CH.consulted
+          ? "no hay ningun corte de caja capturado todavia"
+          : "este tablero se genero sin leer los cortes de caja") +
+        ", asi que cada cifra es un piso. "));
+    } else if (CH.days_missing) {
+      note.appendChild(el("strong", null,
+        "El total es la venta del dia en " + NUM.format(CH.days_covered) +
+        " dia(s)-marca, y un piso en los otros " + NUM.format(CH.days_missing) +
+        ". "));
+      note.appendChild(el("span", null,
+        "Un dia con corte de caja trae tarjeta + efectivo contado; uno sin corte " +
+        "le falta el efectivo, que no viaja por la API de Clip. La tabla dice cual " +
+        "es cual, dia por dia. "));
+    } else {
+      note.appendChild(el("strong", null,
+        "Esto ya es la venta del dia, no un piso: los " +
+        NUM.format(CH.days_covered) + " dia(s)-marca tienen corte de caja. "));
+      note.appendChild(el("span", null,
+        "Cada total es tarjeta + efectivo contado al cerrar el cajon. "));
+    }
     note.appendChild(el("span", null,
-      (M.limits.cash_excluded
-        ? "Tarjeta y vales si; el efectivo que la app de Clip registra aparte no " +
-          "viaja por esta API, asi que cada cifra es un piso. "
-        : "") +
       "Y esta base guarda dos marcas con repartos distintos: se leen por renglon, " +
       "nunca sumadas."));
 
     var hint = document.getElementById("gross-hint");
-    hint.textContent = "Dia de operacion en hora del negocio (UTC-6), no dia UTC: " +
+    // La linea se queda en tarjeta incluso cuando ya hay cortes. Una linea
+    // mitad tarjeta y mitad total daria un escalon el dia del primer corte que
+    // se leeria como un salto de venta, y ninguna grafica tiene donde explicar
+    // eso. El total por dia vive en la tabla, que si puede decirlo celda a celda.
+    hint.textContent = (M.limits.cash.days_covered
+      ? "La linea es el cobro con tarjeta, tambien en los dias que ya tienen " +
+        "corte: mezclarla con el efectivo daria un escalon el dia del primer " +
+        "corte que se leeria como un salto de venta. El total del dia esta en " +
+        "la tabla. "
+      : "") +
+      "Dia de operacion en hora del negocio (UTC-6), no dia UTC: " +
       "una venta de las 18:00 locales cae en el dia UTC siguiente. " +
       "La linea baja a cero en un dia que paso sin cobro, y se corta donde no hay " +
       "dato: antes del primer dia de la marca, en el dia en curso mientras no " +

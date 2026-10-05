@@ -218,6 +218,12 @@ def modelo_falso(**extra):
         "brands": [{"name": "Casa Dorelia",
                     "totals": {"gross": 10567.0, "tickets": 95}}],
         "apertura_error": None,
+        # El alcance del efectivo sale de aqui, no de una constante: el resumen
+        # del work product tiene que poder dejar de decir "piso" el dia que haya
+        # cortes capturados (BOS-149).
+        "limits": {"cash": {"consulted": True, "all_missing": True,
+                            "days_covered": 0, "days_missing": 28,
+                            "first_covered_day": None, "last_covered_day": None}},
     }
     base.update(extra)
     return base

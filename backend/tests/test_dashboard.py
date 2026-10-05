@@ -58,15 +58,21 @@ def sale(day, total, *, brand="casa-dorelia", at=None, **extra):
     return doc
 
 
-def model(rows, *, today="2026-10-04", hour=12, minute=0):
-    """Modelo armado en un instante fijo. La hora decide si ayer ya se confirmo."""
+def model(rows, *, today="2026-10-04", hour=12, minute=0, cortes=None):
+    """Modelo armado en un instante fijo. La hora decide si ayer ya se confirmo.
+
+    `cortes=None` es el default a proposito: es "no se preguntaron los cortes",
+    y deja el tablero como estaba antes de BOS-149. `cortes=[]` es "se
+    preguntaron y no hay ninguno", que si rotula cada dia como `sin corte`.
+    """
     from datetime import datetime, timezone
 
     from business_day import BUSINESS_TZ
 
     now = datetime.fromisoformat(today + "T00:00:00").replace(
         hour=hour, minute=minute, tzinfo=BUSINESS_TZ).astimezone(timezone.utc)
-    return build_model(rows, title="t", today=today, now=now, db_name="prueba")
+    return build_model(rows, title="t", today=today, now=now, db_name="prueba",
+                       cortes=cortes)
 
 
 def series_of(m, brand):
@@ -235,26 +241,42 @@ def test_el_dia_que_si_haya_costo_el_rotulo_cambia_solo():
 
 
 def test_solo_tarjeta_marca_el_total_como_piso():
-    m = model([sale("2026-10-03", 200.0)])
-    assert m["limits"]["cash_excluded"] is True
+    """Sin cortes, el piso se rotula igual: lo que cambia es que ya se pregunto.
 
-    mixed = model([sale("2026-10-03", 200.0),
-                   sale("2026-10-03", 50.0, payment_method="efectivo")])
-    assert mixed["limits"]["cash_excluded"] is False
+    `consulted: False` es "no se leyeron los cortes" y `all_missing: True` es
+    "se leyeron y no hay ninguno". Los dos son piso, pero solo el segundo se
+    arregla capturando un corte, asi que la pagina los dice distinto.
+    """
+    m = model([sale("2026-10-03", 200.0)])
+    assert m["limits"]["cash"]["consulted"] is False
+    assert m["limits"]["cash"]["all_missing"] is True
+
+    preguntado = model([sale("2026-10-03", 200.0)], cortes=[])
+    assert preguntado["limits"]["cash"]["consulted"] is True
+    assert preguntado["limits"]["cash"]["all_missing"] is True
+
+    # Un renglon de venta con efectivo (punto de venta, no Clip) ya mete el
+    # efectivo en el bruto. Se cuenta, pero no completa ningun dia por si solo:
+    # lo que vuelve citable un dia es el corte del cajon.
+    pos = model([sale("2026-10-03", 200.0),
+                 sale("2026-10-03", 50.0, payment_method="efectivo")])
+    assert pos["limits"]["cash"]["pos_rows"] == 1
 
 
 def test_un_metodo_nuevo_no_hace_pasar_el_total_por_venta_completa():
-    """Falta el efectivo mientras no haya un renglon de efectivo.
+    """Un metodo de cobro nuevo no completa el dia. Solo el corte lo completa.
 
     Antes de BOS-119 esto se preguntaba al reves ("el unico metodo es tarjeta"),
     asi que al separar los vales de la tarjeta el tablero dejaba de decir que el
     total es un piso — sin que nadie escribiera ese cambio. El dinero seguia
-    igual de incompleto.
+    igual de incompleto, y desde BOS-149 lo que mueve el rotulo es el corte del
+    cajon, no el catalogo de metodos.
     """
     m = model([sale("2026-10-03", 200.0),
                sale("2026-10-03", 115.0, payment_method="vales"),
-               sale("2026-10-03", 108.0, payment_method="otro")])
-    assert m["limits"]["cash_excluded"] is True
+               sale("2026-10-03", 108.0, payment_method="otro")], cortes=[])
+    assert m["limits"]["cash"]["all_missing"] is True
+    assert m["limits"]["cash"]["days_covered"] == 0
     assert m["limits"]["payment_methods"] == {"tarjeta": 1, "vales": 1, "otro": 1}
 
 
@@ -803,9 +825,281 @@ def test_la_fuente_del_cierre_viaja_hasta_la_pagina():
     assert "BOS-147, Jefatura de Tecnoparque" in render_html(m)
 
 
+# --------------------------------------------------------------------------
+# 9. El rotulo de piso se mueve en las dos direcciones (BOS-149)
+# --------------------------------------------------------------------------
+#
+# El efectivo no viaja por la API de Clip: lo captura la sucursal al cerrar
+# (`cash_cut.py`, BOS-119). Mientras eso no se dibujaba aqui, el tablero
+# rotulaba piso los 365 dias del eje — tambien los que ya tenian corte — y ese
+# rotulo estaba *escrito*, no calculado.
+#
+# Estas pruebas fijan las dos direcciones, porque las dos se rompen distinto:
+# un dia con corte que siga diciendo piso esconde venta ya contada, y un dia
+# sin corte que deje de decirlo publica un piso como si fuera la venta. La
+# segunda es la mas cara, y la que mas facil se cuela: basta que el de al lado
+# tenga corte.
+
+
+def corte(day, cash, *, brand="casa-dorelia", turno="completo", **extra):
+    """Un corte de caja como lo deja `cash_cut.build_cut`, con lo que se lee.
+
+    Se arma a mano (igual que `sale`) para que la prueba no dependa de la fecha
+    real: `build_cut` calcula `captured_late` contra el dia de hoy, y entonces
+    el mismo caso cambiaria de resultado segun el dia en que corran las
+    pruebas. Que esta forma siga siendo la del documento real lo cuida
+    `test_la_forma_del_corte_es_la_que_de_verdad_guarda_cash_cut`.
+    """
+    doc = {
+        "id": f"{brand}-{day}-{turno}",
+        "cafeteria_id": "c-sji" if brand == "casa-dorelia" else "c-tecno",
+        "brand": brand,
+        "business_date": day,
+        "turno": turno,
+        "ventas_efectivo": cash,
+        "tickets_efectivo": None,
+        "payment_method": "efectivo",
+        "source": "corte_caja",
+        "captured_late": False,
+        "revisions": [],
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_la_forma_del_corte_es_la_que_de_verdad_guarda_cash_cut():
+    """Control positivo: si el documento real cambia, estas pruebas lo dicen.
+
+    Sin esto, `corte()` podria quedarse con un campo que `cash_cut` ya no
+    escribe y las nueve pruebas de abajo seguirian en verde contra un documento
+    que no existe — la forma mas callada de perder una prueba.
+    """
+    import cash_cut
+
+    real = cash_cut.build_cut(cafeteria_id="c-sji", brand="casa-dorelia",
+                              business_date="2026-10-03", fondo_inicial=500.0,
+                              efectivo_contado=1700.0, retiros=0)
+    for campo in ("brand", "business_date", "turno", "ventas_efectivo",
+                  "cafeteria_id", "captured_late", "revisions"):
+        assert campo in real, campo
+    assert real["ventas_efectivo"] == 1200.0
+
+
+def test_un_dia_con_corte_publica_el_total_y_deja_de_decir_piso():
+    m = model([sale("2026-10-03", 800.0)],
+              cortes=[corte("2026-10-03", 1200.0)])
+
+    dia = series_of(m, "casa-dorelia")["2026-10-03"]
+    assert dia["gross"] == 800.0            # la tarjeta sigue siendo la tarjeta
+    assert dia["cash"] == 1200.0            # y el efectivo del corte esta
+    assert dia["gross_total"] == 2000.0     # el total del dia, publicado
+    assert dia["cash_state"] == "con_corte"
+    assert m["limits"]["cash"]["days_covered"] == 1
+    assert m["limits"]["cash"]["all_missing"] is False
+
+
+def test_el_dia_de_al_lado_sin_corte_sigue_siendo_piso():
+    """Las dos direcciones en el mismo tablero. Es el caso que importa.
+
+    Un dia con corte deja de ser piso y el de al lado **no**: el rotulo es por
+    dia, no un booleano para todo el eje. Con un solo flag global, el primer
+    corte capturado habria dejado de rotular piso los otros 364 dias.
+    """
+    m = model([sale("2026-10-02", 500.0), sale("2026-10-03", 800.0)],
+              cortes=[corte("2026-10-03", 1200.0)])
+
+    dias = series_of(m, "casa-dorelia")
+    assert dias["2026-10-03"]["gross_total"] == 2000.0
+    assert dias["2026-10-03"]["cash_state"] == "con_corte"
+    # El de al lado: hueco en el efectivo (no un cero) y sin total.
+    assert dias["2026-10-02"]["cash"] is None
+    assert dias["2026-10-02"]["cash_state"] == "sin_corte"
+    assert dias["2026-10-02"]["gross_total"] is None
+    assert dias["2026-10-02"]["gross"] == 500.0      # su piso sigue a la vista
+    assert m["limits"]["cash"]["days_covered"] == 1
+    assert m["limits"]["cash"]["days_missing"] >= 1
+    assert m["limits"]["cash"]["none_missing"] is False
+
+
+def test_un_corte_en_cero_no_es_un_hueco():
+    """`ventas_efectivo: 0.0` es un cero medido, y es lo que cita el dia.
+
+    Es la trampa del modulo: tratar el cero como "no hay dato" borraria justo
+    la informacion que vuelve completo ese dia — la sucursal abrio y no cobro
+    efectivo, asi que su bruto con tarjeta **ya es** la venta del dia.
+    """
+    m = model([sale("2026-10-03", 800.0)], cortes=[corte("2026-10-03", 0.0)])
+
+    dia = series_of(m, "casa-dorelia")["2026-10-03"]
+    assert dia["cash"] == 0.0
+    assert dia["cash_state"] == "con_corte"      # no "sin_corte"
+    assert dia["gross_total"] == 800.0           # citable, no piso
+    assert m["limits"]["cash"]["days_covered"] == 1
+
+
+def test_el_corte_de_una_marca_no_completa_el_dia_de_la_otra():
+    """Dos sucursales, dos cajones. Un corte nunca cruza la marca."""
+    m = model([sale("2026-10-03", 800.0, brand="casa-dorelia"),
+               sale("2026-10-03", 300.0, brand="le-pain-dore")],
+              cortes=[corte("2026-10-03", 1200.0, brand="casa-dorelia")])
+
+    cd = series_of(m, "casa-dorelia")["2026-10-03"]
+    lp = series_of(m, "le-pain-dore")["2026-10-03"]
+    assert cd["gross_total"] == 2000.0
+    assert lp["cash"] is None
+    assert lp["cash_state"] == "sin_corte"
+    assert lp["gross_total"] is None
+    # Y el efectivo de las dos marcas no se suma en ninguna parte del modelo:
+    # 1200.0 es de una sola, y un 1500.0 (300 + 1200) seria un reparto cruzado.
+    assert 1500.0 not in set(_numeros(m))
+
+
+def test_los_turnos_del_mismo_dia_suman_y_los_duplicados_no():
+    """Dos turnos son dos cajones; dos cortes del mismo turno son uno mal."""
+    m = model([sale("2026-10-03", 800.0)],
+              cortes=[corte("2026-10-03", 700.0, turno="matutino"),
+                      corte("2026-10-03", 500.0, turno="vespertino")])
+    assert series_of(m, "casa-dorelia")["2026-10-03"]["gross_total"] == 2000.0
+    assert m["cortes"]["duplicates"] == []
+
+    # El mismo turno dos veces: el indice unico lo impide al guardar, pero una
+    # base sin indice si puede tenerlo y sumarlo duplica la venta del dia.
+    doble = model([sale("2026-10-03", 800.0)],
+                  cortes=[corte("2026-10-03", 700.0, turno="matutino"),
+                          corte("2026-10-03", 700.0, turno="matutino")])
+    assert len(doble["cortes"]["duplicates"]) == 1
+    checks = {c["id"]: c for c in doble["quality"]["checks"]}
+    assert checks["cortes"]["count"] == 1
+    assert checks["cortes"]["status"] == "critical"
+
+
+def test_un_corte_tarde_o_corregido_se_marca_en_su_dia():
+    """Ese numero se recordo o se corrigio: cuenta igual, no se cita igual."""
+    m = model([sale("2026-10-03", 800.0), sale("2026-10-02", 400.0)],
+              cortes=[corte("2026-10-03", 1200.0, captured_late=True),
+                      corte("2026-10-02", 900.0,
+                            revisions=[{"reason": "faltaba un retiro"}])])
+
+    dias = series_of(m, "casa-dorelia")
+    assert dias["2026-10-03"]["cash_late"] is True
+    assert "cash_revised" not in dias["2026-10-03"]
+    assert dias["2026-10-02"]["cash_revised"] is True
+    assert "cash_late" not in dias["2026-10-02"]
+    # El dinero entra igual: marcar no es descartar.
+    assert dias["2026-10-03"]["gross_total"] == 2000.0
+    assert m["limits"]["cash"]["late_cuts"] == 1
+    assert m["limits"]["cash"]["revised_cuts"] == 1
+    assert "tarde" in render_html(m)
+
+
+def test_el_efectivo_que_ya_estaba_en_el_bruto_no_se_cuenta_dos_veces():
+    """Un renglon de venta en efectivo + un corte del mismo dia = un peso doble.
+
+    Hoy no pasa (la sucursal no usa el punto de venta), y por eso mismo tiene
+    que estar probado: el dia que se use, nadie se va a acordar de esta resta.
+    Gana el bruto, que tiene el cobro renglon por renglon.
+    """
+    m = model([sale("2026-10-03", 800.0),
+               sale("2026-10-03", 300.0, payment_method="efectivo")],
+              cortes=[corte("2026-10-03", 300.0)])
+
+    dia = series_of(m, "casa-dorelia")["2026-10-03"]
+    assert dia["gross"] == 1100.0          # el bruto ya traia el efectivo
+    assert dia["gross_total"] is None      # no se le suma el corte encima
+    assert dia["cash_state"] == "doble"
+    assert 1400.0 not in set(_numeros(m))  # el total con el peso duplicado
+    assert len(m["cortes"]["double_counted"]) == 1
+    checks = {c["id"]: c for c in m["quality"]["checks"]}
+    assert checks["cortes"]["count"] == 1
+
+
+def test_el_total_citable_es_el_de_los_dias_con_corte_y_solo_esos():
+    """Sumar el efectivo que haya contra el bruto de todo el rango da una cifra
+    mitad completa y mitad piso: no se puede citar ni como una cosa ni como la
+    otra, y la tabla no tiene donde decirlo."""
+    m = model([sale("2026-10-02", 500.0), sale("2026-10-03", 800.0)],
+              cortes=[corte("2026-10-03", 1200.0)])
+
+    totales = m["brands"][0]["totals"]
+    assert totales["gross"] == 1300.0            # la tarjeta de los dos dias
+    assert totales["con_corte"]["days"] == 1
+    assert totales["con_corte"]["total"] == 2000.0   # solo el dia con corte
+    assert totales["con_corte"]["first_day"] == "2026-10-03"
+    # 2500.0 (los 1300 de tarjeta + los 1200 de efectivo de un solo dia) es
+    # justo la cifra mitad piso que no puede existir en el modelo.
+    assert 2500.0 not in set(_numeros(m))
+
+
+def test_no_preguntar_los_cortes_no_es_lo_mismo_que_no_tener_ninguno():
+    """Los dos salen en piso, pero solo uno se arregla capturando un corte."""
+    sin_preguntar = model([sale("2026-10-03", 800.0)])
+    assert sin_preguntar["cortes"] is None
+    assert sin_preguntar["limits"]["cash"]["consulted"] is False
+    # Sin preguntar, la celda no dice "sin corte": no se sabe.
+    assert "cash_state" not in series_of(sin_preguntar, "casa-dorelia")["2026-10-03"]
+
+    preguntado = model([sale("2026-10-03", 800.0)], cortes=[])
+    assert preguntado["cortes"]["cuts"] == 0
+    assert preguntado["limits"]["cash"]["consulted"] is True
+    assert series_of(preguntado, "casa-dorelia")["2026-10-03"]["cash_state"] == "sin_corte"
+
+
+def test_un_corte_que_no_se_pudo_leer_no_se_publica_como_que_no_hay():
+    """"Falta el efectivo" y "no pude preguntar por el efectivo" no son lo mismo.
+
+    Las dos dibujan piso, asi que sin publicar la razon se verian iguales — y
+    una se arregla capturando mientras la otra se arregla levantando Mongo.
+    """
+    m = model([sale("2026-10-03", 800.0)])
+    m = dict(m, cortes=None, cortes_error="falta `DB_NAME` (o --db)")
+    assert "no se pudieron leer los cortes" in render_html(m).lower()
+
+    # Y al reves: con cortes leidos, el error no se publica.
+    ok = model([sale("2026-10-03", 800.0)], cortes=[corte("2026-10-03", 10.0)])
+    assert ok["cortes_error"] is None
+
+
+def test_el_total_del_dia_viaja_hasta_la_pagina():
+    m = model([sale("2026-10-02", 500.0), sale("2026-10-03", 800.0)],
+              cortes=[corte("2026-10-03", 1200.0)])
+    html = render_html(m)
+
+    # El total del dia con corte y el rotulo del dia sin corte, los dos en la
+    # pagina: el modelo puede tenerlos y la plantilla no dibujarlos.
+    assert "2000.0" in html
+    assert "sin corte" in html
+    assert "con corte" in html
+
+
+def test_un_corte_en_un_dia_declarado_sin_operacion_sale_a_los_controles():
+    """Las dos cosas no pueden ser ciertas, y el dinero no se borra."""
+    from datetime import datetime, timezone
+
+    from business_day import BUSINESS_TZ
+
+    now = datetime.fromisoformat("2026-10-04T00:00:00").replace(
+        hour=12, tzinfo=BUSINESS_TZ).astimezone(timezone.utc)
+    cierres = {"source": "prueba", "windows": [
+        {"brand": "le-pain-dore", "from": "2026-09-28", "to": "2026-09-30",
+         "label": "sin operacion", "note": None, "days": 3}]}
+    m = build_model([sale("2026-09-27", 500.0, brand="le-pain-dore"),
+                     sale("2026-10-01", 300.0, brand="le-pain-dore")],
+                    title="t", today="2026-10-04", now=now, db_name="prueba",
+                    cierres=cierres,
+                    cortes=[corte("2026-09-29", 400.0, brand="le-pain-dore")])
+
+    dia = series_of(m, "le-pain-dore")["2026-09-29"]
+    assert dia["closed"] == "sin operacion"
+    assert dia["cash"] == 400.0        # el dinero se dibuja igual
+    assert dia["gross_total"] is None  # no hay tarjeta con que totalizar
+    assert len(m["cortes"]["on_closed_days"]) == 1
+    checks = {c["id"]: c for c in m["quality"]["checks"]}
+    assert checks["cortes"]["count"] == 1
+
+
 def test_el_rotulo_de_los_controles_cuenta_su_propia_lista():
     # Decia "los cinco"; al entrar el sexto control el texto se quedo mintiendo
     # sobre su propia lista. Ahora el numero sale del modelo.
     m = model([sale("2026-10-03", 200.0)])
-    assert len(m["quality"]["checks"]) == 6
+    assert len(m["quality"]["checks"]) == 7
     assert "Los cinco deben estar en cero" not in render_html(m)

@@ -211,8 +211,11 @@ Lo que **no** puede hacer, por diseño y con pruebas que lo sostienen
 
 - publicar un total de las dos marcas como "la venta" — la suma solo existe con
   el nombre `control_sum`, igual que `gross_all_brands` en `brands.py`;
-- llamar "venta" al cobro con tarjeta — cada cifra va rotulada como piso, porque
-  el efectivo no pasa por la API de Clip;
+- llamar "venta" al cobro con tarjeta — una cifra sin corte de caja va rotulada
+  como piso, porque el efectivo no pasa por la API de Clip. El rotulo se
+  **calcula por dia y por marca**: con el corte del dia la celda publica el
+  total (tarjeta + efectivo) y deja de decir piso; sin el, lo sigue diciendo
+  aunque el dia de al lado si tenga corte;
 - dibujar utilidad cuando no la sabe — las ventas de Clip entran con
   `cost_known: false`, asi que una grafica de margen daria cero y se leeria como
   perder todo el margen. El rotulo se **calcula**: el dia que entre venta con
@@ -540,10 +543,18 @@ Los tres caminos que quedan, de menos a mas costo:
    turno, que ademas sirve para cuadrar contra la caja fisica. Es el unico
    camino que no depende de Clip, y el mas trabajo.
 
-Mientras no entre un solo renglon de efectivo, todo total de este camino es un
-**piso**. El tablero lo dice y lo *calcula* (`limits.cash_excluded` es
-`"efectivo" not in payment_methods`): el dia que entre efectivo, deja de decirlo
-solo.
+Mientras un dia no tenga corte de caja, su total de este camino es un **piso**.
+El tablero lo dice y lo *calcula*, y desde BOS-149 lo calcula **por dia y por
+marca** (`limits.cash` y el `cash_state` de cada punto de la serie): un dia con
+corte deja de ser piso y el de al lado sigue siendolo. Antes era un solo
+booleano para todo el eje (`limits.cash_excluded`), asi que rotulaba piso
+tambien los dias que ya tenian corte — y el primer corte capturado habria
+dejado de rotular piso los otros 364.
+
+Por dia *y por marca* porque un corte de Casa Dorelia no completa el dia de Le
+Pain Dore: son dos sucursales con dos cajones. La publicacion
+(`publish_dashboard.py`) lee `cash_cuts` de la misma base sin que haya que
+pedirlo; `--sin-cortes` es lo que hay que escribir para volver al piso.
 
 ### Re-etiquetar lo ya cargado
 
@@ -564,7 +575,9 @@ idempotente (la segunda corrida da `to_update: 0`). Corrido el 2026-10-04:
 
 - **No trae efectivo.** La API de Clip entrega lo que cobro la terminal (tarjeta
   y vales); el efectivo de la app no pasa por ahi (medido arriba). El total
-  cargado siempre es menor a la venta real de la sucursal.
+  cargado siempre es menor a la venta real de la sucursal, y el que lo completa
+  es el corte de caja (`cash_cut.py`), no esta carga. El tablero ya suma los
+  dos por dia y por marca (BOS-149); el dia sin corte se queda en piso.
 - **No mueve inventario.** La venta ya salio por el POS de Clip; descontarla otra
   vez la contaria doble. Los documentos quedan con `inventory_applied: false`.
 - **No vuelve a sumar IVA.** El monto de Clip ya viene con IVA incluido; el

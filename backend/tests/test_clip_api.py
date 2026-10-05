@@ -636,15 +636,27 @@ def test_tope_de_paginas_por_ventana():
 
 def test_el_resumen_de_depositos_va_con_fechas_sin_hora():
     url = build_settlements_url(datetime(2026, 7, 6, 22, 8, tzinfo=timezone.utc),
-                                datetime(2026, 10, 4, 1, 30, tzinfo=timezone.utc))
+                                datetime(2026, 10, 4, 15, 30, tzinfo=timezone.utc))
     assert "from=2026-07-06" in url
     assert "to=2026-10-04" in url
     # Si se colara la hora, Clip contesta 400 y el probe miente diciendo "sin acceso".
     assert "T" not in url.split("?", 1)[1]
 
 
+def test_el_dia_de_depositos_es_el_de_cdmx_no_el_de_utc():
+    """`to` se valida contra el dia de Clip, no contra UTC.
+
+    A las 19:30 de CDMX ya es el dia siguiente en UTC, y pedir ese `to` da
+    `400 "[to] date should be before or equals current date"`. Pasó el
+    2026-10-04 y se leyo como falta de acceso a depositos.
+    """
+    url = build_settlements_url(datetime(2026, 7, 6, 22, 8, tzinfo=timezone.utc),
+                                datetime(2026, 10, 4, 1, 30, tzinfo=timezone.utc))
+    assert "to=2026-10-03" in url
+
+
 def test_depositos_no_se_consultan_mas_alla_del_tope_de_clip():
-    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 5)
     probe_deposits(CREDS, days=360, transport=transport, now=NOW)
     desde = transport.urls[0].split("from=")[1].split("&")[0]
     # 90 dias es el tope documentado; pedir mas tumba la consulta completa.
@@ -658,7 +670,7 @@ def test_depositos_viajan_con_el_user_agent_propio():
     your browser's signature" en las dos sucursales, y eso se iba a publicar como
     un hallazgo sobre la cuenta de Clip cuando era un encabezado faltante nuestro.
     """
-    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 5)
     probe_deposits(CREDS, transport=transport, now=NOW)
     for headers in transport.headers:
         assert headers.get("User-Agent") == "casa-dorelia-ingesta/1.0"
@@ -666,12 +678,32 @@ def test_depositos_viajan_con_el_user_agent_propio():
 
 def test_un_401_en_depositos_no_se_cuenta_como_cero_efectivo():
     """El 401 dice "no puedes ver", no "no hay". Confundirlos inventa un hueco medido."""
-    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 3)
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 5)
     resultado = probe_deposits(CREDS, transport=transport, now=NOW)
     assert resultado["acceso"] is False
     assert resultado["efectivo_en_depositos"] is None
-    assert [a["auth"] for a in resultado["attempts"]] == ["basic", "x-api-key", "x-api-key+basic"]
+    assert [a["auth"] for a in resultado["attempts"]] == [
+        "basic", "x-api-key-token", "x-api-key-base64", "x-api-key-apikey",
+        "x-api-key+basic",
+    ]
     assert all(a["status"] == 401 for a in resultado["attempts"])
+
+
+def test_en_x_api_key_va_el_token_completo_no_el_api_key_pelon():
+    """La doc de autenticacion de Clip es literal: en `x-api-key` va el token.
+
+    El token es `Basic base64(API_KEY:SECRET_KEY)`, no el api_key. Mandar ahi el
+    UUID pelon da 401 por encabezado mal armado, y ese 401 es identico al de
+    "no tienes alcance de depositos" — asi se publica un hallazgo falso sobre la
+    cuenta. El token completo tiene que ser el PRIMER relleno de `x-api-key`.
+    """
+    transport = FakeTransport([(401, {"message": "Unauthorized"})] * 5)
+    probe_deposits(CREDS, transport=transport, now=NOW)
+    enviados = [h.get("x-api-key") for h in transport.headers]
+    assert enviados[1] == CREDS.auth_header()
+    assert enviados[1].startswith("Basic ")
+    # El api_key pelon se sigue probando, pero despues del token documentado.
+    assert enviados[3] == CREDS.api_key
 
 
 def test_depositos_prueba_los_esquemas_hasta_que_uno_entra():
@@ -681,8 +713,9 @@ def test_depositos_prueba_los_esquemas_hasta_que_uno_entra():
     ])
     resultado = probe_deposits(CREDS, transport=transport, now=NOW)
     assert resultado["acceso"] is True
-    assert resultado["auth"] == "x-api-key"
-    assert resultado["efectivo_en_depositos"] is False
+    assert resultado["auth"] == "x-api-key-token"
+    # Entrar no es medir: sin depositos en la ventana no hay veredicto de efectivo.
+    assert resultado["efectivo_en_depositos"] is None
 
 
 def test_el_desglose_de_depositos_cuenta_el_metodo_de_pago():
@@ -695,6 +728,33 @@ def test_el_desglose_de_depositos_cuenta_el_metodo_de_pago():
     assert resultado["by_payment_method"] == {"CASH": 1, "DEBIT": 1}
     assert resultado["efectivo_en_depositos"] is True
     assert "W472RZQKV" in transport.urls[1]
+
+
+def test_el_desglose_se_pide_por_el_uuid_de_links_no_por_el_id_legible():
+    """El resumen trae DOS identificadores y solo uno sirve en el detalle.
+
+    Medido el 2026-10-04 con la cuenta de SJI: pedir
+    `/settlements/OV6QJWWWH` (el `settlement_report_id`) contesta
+    `400 {"error_code":"V01","description":"settlement_id Invalid pattern"}`,
+    mientras que el UUID de `links.self.href` contesta 200 con el desglose.
+    Los seis depositos de la sucursal se veian como seis 400 por esto.
+    """
+    transport = FakeTransport([
+        (200, {"settlements": [{
+            "settlement_report_id": "OV6QJWWWH",
+            "links": {"self": {"href": "/settlements/900bee1e-925b-4d81-85f3-285c53531326",
+                               "method": "GET"}},
+        }]}),
+        (200, {"settlement": {"details": [{"date": "2026-09-16", "payments": [
+            {"payment_method": "OTHER"},
+        ]}]}}),
+    ])
+    resultado = probe_deposits(CREDS, transport=transport, now=NOW)
+    assert transport.urls[1].endswith("/settlements/900bee1e-925b-4d81-85f3-285c53531326")
+    assert "OV6QJWWWH" not in transport.urls[1]
+    assert resultado["deposits_read"] == 1
+    assert resultado["by_payment_method"] == {"OTHER": 1}
+    assert resultado["efectivo_en_depositos"] is False
 
 
 def test_el_desglose_anidado_por_dia_tambien_se_recorre():

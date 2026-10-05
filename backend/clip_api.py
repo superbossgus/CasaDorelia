@@ -103,7 +103,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from clip_import import classify_status, normalize_payment_method
@@ -817,8 +817,8 @@ def summarize_census(payments: Iterable[Mapping[str, Any]], *,
 # censo nunca lo midio, asi que mientras no se pruebe, "la API no da efectivo"
 # era una afirmacion sobre UNA ruta, no sobre la cuenta.
 #
-# Medido el 2026-10-04 (BOS-151), las dos sucursales, cinco esquemas de
-# autenticacion (Basic, x-api-key, Bearer de cada uno, y los dos juntos):
+# Medido el 2026-10-04 (BOS-151), las dos sucursales, los cinco rellenos de
+# credencial que admite la doc de autenticacion (ver `deposit_auth_schemes`):
 #
 #     GET /payments      Basic -> 200   (82 cobros en 20 dias, control positivo)
 #     GET /settlements    todos -> 401  {"message":"Unauthorized"}
@@ -837,6 +837,21 @@ MAX_DEPOSIT_AGE = timedelta(days=90)
 CASH_LABELS = ("cash", "efectivo", "contado")
 
 
+def _business_date(value: datetime) -> date:
+    """La fecha de calendario del negocio, no la de UTC.
+
+    `/settlements` valida `to` contra **su** dia, no contra UTC. Despues de las
+    18:00 de CDMX, `_as_utc(now).date()` ya es el dia siguiente y Clip contesta
+    `400 "[to] date should be before or equals current date"`. Pasó de verdad el
+    2026-10-04 y se veia igual que un rango mal pedido.
+    """
+    from sales_import import BUSINESS_TZ
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=BUSINESS_TZ)
+    return value.astimezone(BUSINESS_TZ).date()
+
+
 def build_settlements_url(start: datetime, end: datetime, *,
                           base_url: str = API_BASE) -> str:
     """Resumen de depositos. A diferencia de `/payments`, aqui van fechas sin hora."""
@@ -845,8 +860,8 @@ def build_settlements_url(start: datetime, end: datetime, *,
             f"rango invertido: `to` ({end.date()}) es anterior a `from` ({start.date()})"
         )
     params = [
-        ("from", _as_utc(start).date().isoformat()),
-        ("to", _as_utc(end).date().isoformat()),
+        ("from", _business_date(start).isoformat()),
+        ("to", _business_date(end).isoformat()),
     ]
     return f"{base_url.rstrip('/')}{SETTLEMENTS_PATH}?{urllib.parse.urlencode(params)}"
 
@@ -856,15 +871,64 @@ def deposit_auth_schemes(credentials: ClipCredentials) -> List[Tuple[str, Dict[s
 
     La doc de depositos pide `x-api-key` mientras que `/payments` acepta Basic;
     probar los dos es lo que separa "ruta equivocada" de "esquema equivocado".
+
+    Y "probar `x-api-key`" no es una sola cosa. La pagina de autenticacion
+    (`developer.clip.mx/reference/token-de-autenticacion`) define el *token*
+    como la cadena completa `Basic base64(API_KEY:SECRET_KEY)` y dice que ese
+    token "puede ser ingresado en el campo **x-api-key** o **authorization**".
+    O sea: en `x-api-key` va el token entero, con la palabra `Basic` incluida.
+    La primera version de este probe mandaba ahi el api_key pelon (un UUID),
+    que no es el token — asi que su 401 no probaba falta de alcance, probaba un
+    encabezado mal armado. Van los tres rellenos posibles para que el 401, si
+    sigue, sea del alcance y no nuestro.
     """
+    token = credentials.auth_header()               # "Basic <base64>"
+    base64_only = token.split(" ", 1)[1]            # el base64 sin la palabra
     return [
-        ("basic", {"Authorization": credentials.auth_header()}),
-        ("x-api-key", {"x-api-key": credentials.api_key}),
+        ("basic", {"Authorization": token}),
+        ("x-api-key-token", {"x-api-key": token}),
+        ("x-api-key-base64", {"x-api-key": base64_only}),
+        ("x-api-key-apikey", {"x-api-key": credentials.api_key}),
         ("x-api-key+basic", {
-            "x-api-key": credentials.api_key,
-            "Authorization": credentials.auth_header(),
+            "x-api-key": token,
+            "Authorization": token,
         }),
     ]
+
+
+def settlement_detail_url(item: Mapping[str, Any], *,
+                          base_url: str = API_BASE) -> Optional[str]:
+    """La ruta del desglose de UN deposito, tomada de `links.self.href`.
+
+    El `settlement_report_id` que trae el resumen (`OV6QJWWWH`) **no** sirve en
+    la ruta de detalle: Clip contesta
+    `400 {"error_code":"V01","description":"settlement_id Invalid pattern"}`
+    porque ahi espera el UUID que viene en `links.self.href`. Son dos
+    identificadores distintos para el mismo deposito, y armar la URL con el
+    legible da un 400 que se lee igual que "no hay desglose".
+    """
+    links = item.get("links")
+    href: Optional[str] = None
+    if isinstance(links, Mapping):
+        self_link = links.get("self")
+        if isinstance(self_link, Mapping):
+            href = _text(self_link.get("href")) or None
+        elif isinstance(self_link, str):
+            href = _text(self_link) or None
+    if href:
+        if href.startswith("http://") or href.startswith("https://"):
+            return href
+        return f"{base_url.rstrip('/')}/{href.lstrip('/')}"
+
+    # Sin `links` queda el id legible, que probablemente de 400. Se intenta
+    # igual para que el fallo quede registrado como intento, no como silencio.
+    report_id = _text(item.get("settlement_report_id"))
+    if not report_id:
+        return None
+    return (
+        f"{base_url.rstrip('/')}{SETTLEMENTS_PATH}/"
+        f"{urllib.parse.quote(report_id, safe='')}"
+    )
 
 
 def _deposit_rows(detail: Mapping[str, Any]) -> Iterator[Dict[str, Any]]:
@@ -930,7 +994,10 @@ def probe_deposits(credentials: ClipCredentials, *,
 
     base = {
         "branch": credentials.branch,
-        "window": {"from": start.date().isoformat(), "to": end.date().isoformat()},
+        # Las fechas que de verdad viajaron en la URL, en dia de CDMX. Reportar
+        # el dia de UTC aqui es como se esconde un `to` en el futuro.
+        "window": {"from": _business_date(start).isoformat(),
+                   "to": _business_date(end).isoformat()},
         "attempts": intentos,
     }
 
@@ -940,11 +1007,11 @@ def probe_deposits(credentials: ClipCredentials, *,
             "acceso": False,
             "efectivo_en_depositos": None,
             "note": (
-                "Ningun esquema de autenticacion entro a /settlements. La llave de "
-                "comercio lee /payments pero no depositos, asi que el alcance de "
-                "depositos esta apagado para esta cuenta. `efectivo_en_depositos: "
-                "null` es a proposito: no se puede afirmar que no hay efectivo en un "
-                "reporte que no se pudo leer."
+                "Ningun relleno de credencial entro a /settlements. Mira `attempts` "
+                "antes de concluir falta de alcance: un 400 habla del rango (la "
+                "credencial ya paso), un 401 de la credencial, un 403 del WAF. "
+                "`efectivo_en_depositos: null` es a proposito: no se puede afirmar "
+                "que no hay efectivo en un reporte que no se pudo leer."
             ),
         }
 
@@ -959,12 +1026,12 @@ def probe_deposits(credentials: ClipCredentials, *,
     for item in settlements:
         if not isinstance(item, Mapping):
             continue
-        report_id = _text(item.get("settlement_report_id"))
-        if not report_id:
+        report_id = _text(item.get("settlement_report_id")) or "(sin id)"
+        detail_url = settlement_detail_url(item)
+        if not detail_url:
+            fallidos.append({"settlement_report_id": report_id,
+                             "status": "sin links.self.href ni id"})
             continue
-        detail_url = (
-            f"{API_BASE}{SETTLEMENTS_PATH}/{urllib.parse.quote(report_id, safe='')}"
-        )
         status, body = transport(detail_url, {**BASE_HEADERS, **headers})
         if status != 200:
             fallidos.append({"settlement_report_id": report_id, "status": status})
@@ -994,8 +1061,15 @@ def probe_deposits(credentials: ClipCredentials, *,
         "deposits_failed": fallidos,
         "transactions": transacciones,
         "by_payment_method": dict(sorted(metodos.items(), key=lambda kv: (-kv[1], kv[0]))),
-        "efectivo_en_depositos": efectivo > 0,
+        # Sin una sola transaccion leida no hay nada que clasificar. Un `false`
+        # aqui seria el mismo error que contar un 401 como cero: afirmar sobre un
+        # reporte vacio. `null` es el unico valor honesto.
+        "efectivo_en_depositos": (efectivo > 0) if transacciones else None,
         "note": (
+            "efectivo_en_depositos: null -> la ventana entro (200) pero no trajo "
+            "ninguna transaccion que clasificar. Hay acceso; lo que falta es un "
+            "periodo con depositos. No es un cero medido."
+        ) if not transacciones else (
             "efectivo_en_depositos: false -> el reporte de depositos tampoco trae "
             "efectivo, que es lo esperado: Clip no deposita dinero que nunca toco."
         ) if efectivo == 0 else (

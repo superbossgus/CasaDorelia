@@ -18,6 +18,21 @@ Contrato de la API, verificado contra developer.clip.mx (2026-10-01):
   `Forbidden`, `GET /payment/{id}` -> 403 pidiendo firma AWS. El renglon de la
   lista **es** el registro completo que ve la llave de comercio; no hay una
   vista mas detallada atras donde pudiera venir el metodo de pago real.
+- **No se vale descubrir rutas por barrido en este gateway.** `403
+  {"message":"Forbidden"}` es la respuesta a **cualquier** ruta desconocida:
+  medido el 2026-10-04, `/a/b/c/d/e` contesta exactamente lo mismo que
+  `/webhooks` o `/reports`. Un barrido sin ese control positivo deja una lista
+  de 403 que se lee como "estas rutas existen pero falta alcance", y es falso.
+  Lo que si discrimina son los otros dos sabores:
+
+  - `401 {"message":"Unauthorized"}` -> el prefijo **si** esta ruteado y el
+    servicio de atras rechazo la credencial (`/settlements/...`).
+  - `403` pidiendo `Credential`/`Signature` -> ruta real de **otro** esquema de
+    auth, el de firma AWS con el que entra la app de Clip (`/subscriptions`,
+    `/merchants/me`, y la ruta de efectivo).
+
+  Con ese criterio, la superficie que la llave de comercio alcanza son
+  `/payments*` y `/settlements*`, y ninguno tiene dimension de efectivo.
 - Autenticacion: `Authorization: Basic base64(API_KEY:SECRET_KEY)`. El panel de
   Clip entrega las dos piezas al crear la credencial y **el secret key solo se
   puede ver una vez**; si se pierde hay que generar otra.

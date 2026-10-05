@@ -18,21 +18,55 @@ Contrato de la API, verificado contra developer.clip.mx (2026-10-01):
   `Forbidden`, `GET /payment/{id}` -> 403 pidiendo firma AWS. El renglon de la
   lista **es** el registro completo que ve la llave de comercio; no hay una
   vista mas detallada atras donde pudiera venir el metodo de pago real.
-- **No se vale descubrir rutas por barrido en este gateway.** `403
-  {"message":"Forbidden"}` es la respuesta a **cualquier** ruta desconocida:
-  medido el 2026-10-04, `/a/b/c/d/e` contesta exactamente lo mismo que
-  `/webhooks` o `/reports`. Un barrido sin ese control positivo deja una lista
-  de 403 que se lee como "estas rutas existen pero falta alcance", y es falso.
-  Lo que si discrimina son los otros dos sabores:
 
-  - `401 {"message":"Unauthorized"}` -> el prefijo **si** esta ruteado y el
-    servicio de atras rechazo la credencial (`/settlements/...`).
-  - `403` pidiendo `Credential`/`Signature` -> ruta real de **otro** esquema de
-    auth, el de firma AWS con el que entra la app de Clip (`/subscriptions`,
-    `/merchants/me`, y la ruta de efectivo).
+  Ese 500 necesitaba un control, porque "no es UUID" se ve igual: la doc
+  (`reference/obtenerdetalletransaccion`) documenta `GET /payments/{payment_id}`
+  con un UUID, y nuestros renglones no traen `id`. Medido el 2026-10-04 con las
+  tres formas posibles: el folio (`PKV1z5m4`), un UUID bien formado inexistente
+  y el unico `merchant_invoice` con forma de UUID del periodo -> **500 las
+  tres**. O sea que la ruta esta rota para cualquier id, no que le dimos el id
+  equivocado. (El `GET /payments/{id}` que si documentan vive en la API de
+  Checkout, otro host y otro esquema de respuesta: trae `customer`,
+  `description` e `installments`, campos que `api-gw` no manda.)
+- **No se vale descubrir rutas por barrido, y el control va POR PREFIJO.** Que
+  una ruta desconocida contesta `403 {"message":"Forbidden"}` solo es cierto en
+  la **raiz**. Cada prefijo tiene su propio catch-all, con otro codigo y otro
+  cuerpo, asi que un control global no sirve: medido el 2026-10-04 mandando un
+  segmento inventado a cada nivel,
 
-  Con ese criterio, la superficie que la llave de comercio alcanza son
-  `/payments*` y `/settlements*`, y ninguno tiene dimension de efectivo.
+      /ZZZZ_CONTROL                -> 403 {"message":"Forbidden"}
+      /catalog/ZZZZ_CONTROL        -> 403 pidiendo Credential/Signature
+      /checkout/ZZZZ_CONTROL       -> 400 {"message":"Invalid input","code_message":"002"}
+      /catalog/products/ZZZZ       -> 400 "The product ID 'ZZZZ' is not a UUID format."
+      /payments/<cualquier id>     -> 500, incluso con un UUID bien formado
+
+  La trampa es la segunda linea. Una version anterior de este archivo trataba
+  el `403` de firma AWS como "ruta real de otro esquema", y bajo `/catalog` ese
+  es justamente el catch-all: un barrido de 16 nombres plausibles
+  (`/catalog/orders`, `/catalog/sales`, `/catalog/reports`...) devolvio 403 de
+  firma en **todos**, y el control inventado devolvio lo mismo. O sea que bajo
+  ese prefijo solo se pueden confirmar positivos; la ausencia **no se puede
+  medir** con la llave de comercio.
+
+  Y la conclusion que de ahi se saco era falsa. Este archivo afirmaba que "la
+  superficie que la llave de comercio alcanza son `/payments*` y
+  `/settlements*`". **No es cierto**: un 403 de firma en el prefijo no dice nada
+  de lo que hay debajo. `/catalog` contesta 403 de firma, pero
+  `/catalog/products`, `/catalog/categories` y `/catalog/modifiers` contestan
+  **200 con Basic** (ver `fetch_catalog`). El alcance real medido es
+  `/payments`, `/settlements*` y esas tres de `/catalog`.
+
+  Los sabores que si discriminan, cuando se comparan contra el control del
+  **mismo** prefijo:
+
+  - `200` / `400` con un mensaje que habla del parametro -> ruta real.
+  - `401 {"message":"Unauthorized"}` -> el prefijo esta ruteado y el servicio de
+    atras rechazo la credencial (`/settlements/...`).
+  - `403` pidiendo `Credential`/`Signature` -> ruta real de otro esquema de auth
+    (firma AWS, el que usa la app de Clip) **solo si el control del prefijo
+    contesta otra cosa**.
+- **No hay desglose de venta por producto en ninguna ruta legible.** Ver
+  `summarize_catalog` y el punto 6.
 - Autenticacion: `Authorization: Basic base64(API_KEY:SECRET_KEY)`. El panel de
   Clip entrega las dos piezas al crear la credencial y **el secret key solo se
   puede ver una vez**; si se pierde hay que generar otra.
@@ -143,12 +177,42 @@ Decisiones que cambian el dinero reportado (y por que):
    de caja de la app propia (`backend/cash_cut.py` y `RUNBOOK-efectivo.md`, en
    la rama de la app), que es exactamente el camino que si se construyo.
 
+6. **La API no dice QUE se vendio, solo cuanto se cobro.** Medido el 2026-10-04
+   (BOS-151, pregunta de Gustavo: "no veo los productos en el tablero"):
+
+   - **Estructural.** Un desglose de venta es siempre un arreglo de renglones.
+     En el arbol de las transacciones no hay **ni un arreglo**, en ninguna ruta
+     ni en ningun renglon (ver `arrays_in` y el campo `arreglos` de
+     `summarize_schema`). No es que venga vacio: no existe el contenedor. El
+     detector lleva control positivo en las pruebas, porque un detector roto
+     tambien reporta cero.
+   - Tampoco hay texto: barrido de `item`, `producto`, `articulo`, `sku`,
+     `concepto`, `descripcion`, `cantidad`, `catalogo`... sobre el JSON
+     completo -> cero coincidencias en las 82 transacciones de 30 dias. El
+     unico campo libre es `merchant_invoice`, que viene vacio en 81 de 82.
+   - **El catalogo si se lee, y es otra cosa.** `/catalog/products`,
+     `/catalog/categories` y `/catalog/modifiers` contestan 200 con la misma
+     llave de comercio (ver `fetch_catalog`): 27 productos de Tecnoparque con
+     nombre, precio, categoria, SKU, existencias e imagen. Eso es **la carta**,
+     no la venta: dice que se puede vender, no que se vendio. Cruzar un cobro
+     de $144.50 con precios de la carta es una conjetura, no una medicion, y no
+     entra al tablero de dinero.
+   - La doc de Clip no tiene seccion de catalogo, ordenes, inventario ni
+     renglones de venta (`developer.clip.mx/llms.txt`, leido el 2026-10-04), asi
+     que estas tres rutas son **no documentadas**: funcionan hoy y pueden
+     cambiar sin aviso. Por eso `summarize_catalog` reporta lo que recibio y no
+     asume forma.
+
+   Veredicto: `desglose_de_ventas_en_la_api` es `false` y se **calcula**, igual
+   que el del efectivo. El dia que un renglon traiga un arreglo, se voltea solo.
+
 Uso rapido (la credencial se lee del entorno, nunca de un argumento):
     python clip_api.py probe --branch sji
     python clip_api.py pull --branch sji --from 2026-09-21 --to 2026-10-01
     python clip_api.py census --branch sji --days 360   # ?ya llega efectivo?
     python clip_api.py schema --branch sji --days 360   # ?cabe el efectivo?
     python clip_api.py deposits --branch sji            # ?y en los depositos?
+    python clip_api.py catalog --branch sji             # ?y los productos?
 """
 from __future__ import annotations
 
@@ -890,6 +954,14 @@ MAX_DISTINCT_VALUES = 12
 # superficie (transacciones o depositos).
 CASH_LABELS = ("cash", "efectivo", "contado")
 
+# Etiquetas que delatarian un renglon de producto. Mismo metodo que el efectivo:
+# se barre el JSON completo, no una lista de campos escrita a mano.
+ITEM_LABELS = (
+    "item", "producto", "articulo", "sku", "concepto", "descripcion",
+    "description", "cantidad", "quantity", "catalog", "catalogo",
+    "line_item", "detalle",
+)
+
 
 def _new_field_slot() -> Dict[str, Any]:
     return {"present": 0, "nulls": 0, "values": set(),
@@ -946,6 +1018,35 @@ def _mentions_cash(payment: Mapping[str, Any]) -> bool:
     return any(label in blob for label in CASH_LABELS)
 
 
+def _mentions_items(payment: Mapping[str, Any]) -> List[str]:
+    """?Algo en esta transaccion nombra un producto? Devuelve que etiquetas pego."""
+    blob = json.dumps(payment, ensure_ascii=False).lower()
+    return sorted({label for label in ITEM_LABELS if label in blob})
+
+
+def arrays_in(value: Any, path: str = "") -> List[Tuple[str, int]]:
+    """Toda ruta del arbol que sea un arreglo, con su longitud.
+
+    Esta es la prueba estructural de si cabe un desglose por producto. Un
+    desglose de venta es **siempre** un arreglo de renglones: si el arbol no
+    tiene ni un arreglo, no hay contenedor donde quepan los productos, y eso es
+    mas fuerte que "vino vacio".
+
+    Se reporta la ruta y la longitud (no el contenido) para que el que lea pueda
+    ir a verla. Un arreglo de longitud 0 tambien se reporta: existir vacio y no
+    existir son hallazgos distintos.
+    """
+    found: List[Tuple[str, int]] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            found.extend(arrays_in(item, f"{path}.{key}" if path else str(key)))
+    elif isinstance(value, (list, tuple)):
+        found.append((path or "(raiz)", len(value)))
+        for item in value:
+            found.extend(arrays_in(item, f"{path}[]"))
+    return found
+
+
 def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
                      branch: str) -> Dict[str, Any]:
     """Inventario del esquema que entrega `/payments`, campo por campo.
@@ -969,6 +1070,9 @@ def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
     sin_tarjeta: List[str] = []
     menciona: List[str] = []
     metodos: Dict[str, int] = {}
+    arreglos: Dict[str, int] = {}
+    con_arreglo: List[str] = []
+    palabras_producto: Dict[str, int] = {}
 
     for payment in payments:
         total += 1
@@ -982,6 +1086,14 @@ def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
             sin_tarjeta.append(folio)
         if _mentions_cash(payment):
             menciona.append(folio)
+
+        rutas = arrays_in(payment)
+        if rutas:
+            con_arreglo.append(folio)
+            for ruta, _largo in rutas:
+                arreglos[ruta] = arreglos.get(ruta, 0) + 1
+        for etiqueta in _mentions_items(payment):
+            palabras_producto[etiqueta] = palabras_producto.get(etiqueta, 0) + 1
 
     return {
         "branch": branch,
@@ -1005,6 +1117,12 @@ def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
         "cardless_receipts": sin_tarjeta,
         "mentions_cash": menciona,
         "efectivo_en_el_esquema": bool(menciona),
+        # ?Cabe un desglose por producto? Un desglose es siempre un arreglo.
+        "arreglos": dict(sorted(arreglos.items(), key=lambda kv: -kv[1])),
+        "receipts_con_arreglo": con_arreglo[:20],
+        "palabras_de_producto": dict(sorted(palabras_producto.items(),
+                                            key=lambda kv: -kv[1])),
+        "desglose_de_ventas_en_la_api": bool(arreglos or palabras_producto),
         "note": (
             "efectivo_en_el_esquema: false -> ninguna de las rutas del esquema "
             "nombra efectivo, en ningun renglon. Los renglones sin tarjeta hay "
@@ -1012,6 +1130,18 @@ def summarize_schema(payments: Iterable[Mapping[str, Any]], *,
         ) if not menciona else (
             "efectivo_en_el_esquema: true -> hay renglones que nombran efectivo; "
             "revisar `mentions_cash` y cargarlos."
+        ),
+        "nota_desglose": (
+            "desglose_de_ventas_en_la_api: false -> no hay NI UN arreglo en el "
+            "arbol de ninguna transaccion, y un desglose de venta siempre es un "
+            "arreglo de renglones. No es que venga vacio: no existe el "
+            "contenedor. El catalogo (la carta) si se lee aparte con "
+            "`clip_api.py catalog`, pero eso dice que se puede vender, no que se "
+            "vendio."
+        ) if not (arreglos or palabras_producto) else (
+            "desglose_de_ventas_en_la_api: true -> aparecio un arreglo o una "
+            "palabra de producto; revisar `arreglos` y `palabras_de_producto` "
+            "antes de dar por cerrada la pregunta del desglose."
         ),
     }
 
@@ -1366,6 +1496,178 @@ def probe_deposits(credentials: ClipCredentials, *,
 
 
 # --------------------------------------------------------------------------
+# Catalogo (la carta). NO es la venta.
+# --------------------------------------------------------------------------
+#
+# Tres rutas no documentadas que si contesta la llave de comercio. Se
+# encontraron porque `/catalog` contesta 403 pidiendo firma AWS y eso **no**
+# significa que el subarbol este fuera de alcance (ver el docstring del modulo).
+#
+# Lo que entregan es la carta: que productos existen, a que precio, en que
+# categoria y con cuantas existencias. Lo que **no** entregan es que se vendio.
+# Esa distincion es la razon de ser de este bloque: alguien que vea "catalogo"
+# en el codigo va a suponer que de aqui sale el desglose de ventas, y no sale.
+
+CATALOG_PATHS = {
+    "products": "/catalog/products",
+    "categories": "/catalog/categories",
+    "modifiers": "/catalog/modifiers",
+}
+
+# Nombres plausibles de una ruta de ventas por producto. Se barren **con su
+# control** y el resultado esperado es `medible: false`: bajo `/catalog` el
+# catch-all es el 403 de firma AWS, el mismo que contestan las candidatas, asi
+# que de este barrido no se puede concluir ausencia. Vive en el codigo para que
+# nadie lo vuelva a correr y lo reporte como evidencia.
+CATALOG_SALES_CANDIDATES = (
+    "/catalog/orders", "/catalog/sales", "/catalog/tickets",
+    "/catalog/transactions", "/catalog/reports", "/catalog/inventory",
+    "/catalog/movements",
+)
+CATALOG_CONTROL_PATH = "/catalog/ZZZZ_CONTROL"
+
+
+def classify_gateway_response(status: int, body: bytes) -> str:
+    """Nombra el sabor de una respuesta del gateway, sin decidir si la ruta existe.
+
+    Solo describe. Decidir si una ruta existe exige comparar contra el control
+    del **mismo** prefijo, y eso lo hace `probe_catalog_sales`, no esta funcion.
+
+    Ojo con `firma_aws`: el mensaje del WAF de Clip tambien contiene la palabra
+    "signature" ("blocked access based on your browser's signature"), asi que
+    clasificar por esa palabra sola confunde los dos. Se exige la cadena
+    `'Credential'` entre comillas, que es la que manda API Gateway.
+    """
+    text = body.decode("utf-8", "replace").lower()
+    if status == 200:
+        return "200"
+    if status == 401:
+        return "401_ruteado"
+    if status == 403:
+        if "'credential'" in text:
+            return "403_firma_aws"
+        if "browser" in text:
+            return "403_waf"
+        return "403_forbidden"
+    if status == 400:
+        return "400_parametros"
+    return f"{status}"
+
+
+def _catalog_rows(payload: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Los renglones de una respuesta de catalogo. La llave es `data`, no `items`."""
+    data = payload.get("data")
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, Mapping)]
+    if isinstance(data, Mapping):
+        return [dict(data)]
+    return []
+
+
+def fetch_catalog(credentials: ClipCredentials, *,
+                  transport: Optional[Transport] = None,
+                  base_url: str = API_BASE) -> Dict[str, Any]:
+    """Lee las tres superficies del catalogo. No asume forma del renglon.
+
+    Son rutas **no documentadas** (la doc de Clip no tiene seccion de catalogo),
+    asi que lo que se reporta es lo que llego: el conteo y las llaves que trajo
+    el renglon. Si Clip les cambia la forma, cambia este reporte en vez de
+    tronar un parser.
+
+    Una superficie que falla no tumba las otras: su error se reporta en su
+    renglon. Un 403 en `/catalog/modifiers` no dice nada de `/catalog/products`.
+    """
+    transport = transport or _urllib_transport
+    surfaces: Dict[str, Any] = {}
+    for name, path in CATALOG_PATHS.items():
+        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            payload = _request_page(url, credentials, transport=transport)
+        except ClipApiError as exc:
+            surfaces[name] = {"leido": False, "error": str(exc), "status": exc.status}
+            continue
+        rows = _catalog_rows(payload)
+        llaves: Dict[str, int] = {}
+        for row in rows:
+            for key in row:
+                llaves[str(key)] = llaves.get(str(key), 0) + 1
+        surfaces[name] = {
+            "leido": True,
+            "renglones": len(rows),
+            "llaves": dict(sorted(llaves.items())),
+            "meta": payload.get("meta") if isinstance(payload.get("meta"), Mapping) else None,
+        }
+    return surfaces
+
+
+def probe_catalog_sales(credentials: ClipCredentials, *,
+                        transport: Optional[Transport] = None,
+                        base_url: str = API_BASE) -> Dict[str, Any]:
+    """?Hay una ruta de ventas por producto bajo `/catalog`? Con control de prefijo.
+
+    `medible` es el punto de la funcion. Si el control (`/catalog/ZZZZ_CONTROL`,
+    que no existe) contesta lo mismo que las candidatas, entonces el barrido no
+    distingue "no existe" de "existe y pide otra firma", y la ausencia **no se
+    puede afirmar**. Reportar las candidatas sin esa bandera es como se publica
+    una lista de 403 como si fuera un hallazgo.
+    """
+    transport = transport or _urllib_transport
+    headers = {**BASE_HEADERS, "Authorization": credentials.auth_header()}
+
+    def sabor(path: str) -> str:
+        status, body = transport(f"{base_url.rstrip('/')}{path}", headers)
+        return classify_gateway_response(status, body)
+
+    control = sabor(CATALOG_CONTROL_PATH)
+    candidatas = {path: sabor(path) for path in CATALOG_SALES_CANDIDATES}
+    distintas = {path: v for path, v in candidatas.items() if v != control}
+    return {
+        "control": {"ruta": CATALOG_CONTROL_PATH, "sabor": control},
+        "candidatas": candidatas,
+        "distintas_del_control": distintas,
+        "medible": bool(distintas),
+        "nota": (
+            "medible: false -> el control inventado contesta igual que todas las "
+            "candidatas, asi que este barrido NO prueba que no exista una ruta de "
+            "ventas por producto. Solo prueba que con esta llave no se puede "
+            "saber. No reportarlo como ausencia."
+        ) if not distintas else (
+            "medible: true -> alguna candidata contesta distinto del control; "
+            "revisar `distintas_del_control`, puede ser una ruta real."
+        ),
+    }
+
+
+def summarize_catalog(credentials: ClipCredentials, *,
+                      transport: Optional[Transport] = None,
+                      base_url: str = API_BASE) -> Dict[str, Any]:
+    """Reporte del catalogo, con el aviso de que no es la venta.
+
+    `ventas_por_producto` queda en **`null`**, no en `false`. Aqui no se midio
+    la venta: se leyo la carta. Un `false` afirmaria que no hay desglose, y esa
+    afirmacion la hace `summarize_schema` contando arreglos sobre transacciones
+    reales, que es otra medicion. Confundirlas es como un 401 se vuelve un cero.
+    """
+    surfaces = fetch_catalog(credentials, transport=transport, base_url=base_url)
+    productos = surfaces.get("products") or {}
+    return {
+        "branch": credentials.branch,
+        "superficies": surfaces,
+        "barrido_de_ventas": probe_catalog_sales(
+            credentials, transport=transport, base_url=base_url),
+        "ventas_por_producto": None,
+        "nota": (
+            "Esto es la CARTA, no la venta: dice que se puede vender y a que "
+            "precio, no que se vendio. El desglose por producto se contesta con "
+            "`clip_api.py schema` (campo `desglose_de_ventas_en_la_api`), que "
+            "cuenta arreglos sobre transacciones reales. Rutas no documentadas: "
+            "pueden cambiar sin aviso."
+        ),
+        "productos": productos.get("renglones"),
+    }
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -1428,6 +1730,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     deposits.add_argument("--days", type=int, default=90,
                           help="cuantos dias hacia atras (default 90, que es el tope de Clip)")
 
+    catalog = sub.add_parser(
+        "catalog",
+        help="lee el catalogo (la carta): productos, categorias y modificadores (BOS-151)",
+    )
+    catalog.add_argument("--branch", required=True)
+
     args = parser.parse_args(argv)
 
     try:
@@ -1486,6 +1794,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         if args.command == "deposits":
             print(json.dumps(probe_deposits(credentials, days=args.days),
+                             indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "catalog":
+            print(json.dumps(summarize_catalog(credentials),
                              indent=2, ensure_ascii=False))
             return 0
 

@@ -17,6 +17,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from clip_api import (  # noqa: E402
+    BASE_HEADERS,
+    CATALOG_SALES_CANDIDATES,
     MAX_DISTINCT_VALUES,
     MAX_PAGES_PER_WINDOW,
     ClipApiError,
@@ -24,17 +26,22 @@ from clip_api import (  # noqa: E402
     ClipCredentials,
     ClipRateLimitError,
     add_one_month,
+    arrays_in,
     branch_slug,
     build_payments_url,
     build_settlements_url,
+    classify_gateway_response,
     credential_env_names,
+    fetch_catalog,
     fetch_rows,
     iter_payments,
     load_credentials,
     map_payment,
+    probe_catalog_sales,
     probe_deposits,
     probe_method_filter,
     split_window,
+    summarize_catalog,
     summarize_census,
     summarize_corte,
     summarize_schema,
@@ -918,3 +925,166 @@ def test_un_desglose_que_falla_no_se_confunde_con_uno_vacio():
     assert resultado["deposits"] == 1
     assert resultado["deposits_read"] == 0
     assert resultado["deposits_failed"] == [{"settlement_report_id": "A1", "status": 500}]
+
+
+# --------------------------------------------------------------------------
+# Desglose por producto (BOS-151): ?la API dice QUE se vendio?
+# --------------------------------------------------------------------------
+
+def test_el_detector_de_arreglos_ve_uno_inyectado():
+    """Control positivo. Un detector roto tambien reporta cero arreglos.
+
+    Sin esta prueba, `desglose_de_ventas_en_la_api: false` podria significar
+    "no hay desglose" o "el detector no funciona", y se leen igual.
+    """
+    rutas = arrays_in({"a": 1, "items": [{"name": "cafe", "qty": 2}]})
+    assert ("items", 1) in rutas
+
+
+def test_el_detector_de_arreglos_distingue_vacio_de_ausente():
+    # Existir vacio y no existir son hallazgos distintos: el primero dice que
+    # Clip tiene el contenedor y hoy no lo llena; el segundo que no existe.
+    assert arrays_in({"items": []}) == [("items", 0)]
+    assert arrays_in({"amount": 10}) == []
+
+
+def test_el_esquema_niega_el_desglose_cuando_no_hay_ni_un_arreglo():
+    reporte = summarize_schema([payment(receipt_no="T1"), payment(receipt_no="T2")],
+                               branch="sji")
+    assert reporte["arreglos"] == {}
+    assert reporte["palabras_de_producto"] == {}
+    assert reporte["desglose_de_ventas_en_la_api"] is False
+    assert "no existe el contenedor" in reporte["nota_desglose"]
+
+
+def test_el_veredicto_del_desglose_se_voltea_solo_si_llega_un_arreglo():
+    """El veredicto se **calcula**: el dia que Clip mande renglones, cambia.
+
+    Esto es lo que impide que un `false` de hoy se vuelva una afirmacion
+    permanente sobre Clip que nadie vuelve a revisar.
+    """
+    reporte = summarize_schema([
+        payment(receipt_no="T1"),
+        payment(receipt_no="P1", items=[{"name": "concha", "qty": 1}]),
+    ], branch="sji")
+
+    assert reporte["desglose_de_ventas_en_la_api"] is True
+    assert reporte["arreglos"]["items"] == 1
+    assert reporte["receipts_con_arreglo"] == ["P1"]
+    # Y el barrido de texto lo ve tambien, por su cuenta.
+    assert reporte["palabras_de_producto"]["item"] == 1
+    assert "antes de dar por cerrada" in reporte["nota_desglose"]
+
+
+def test_el_mensaje_del_waf_no_se_confunde_con_la_firma_aws():
+    """El WAF dice "signature" tambien. Clasificar por esa palabra los junta."""
+    waf = b"The site owner has blocked access based on your browser's signature"
+    assert classify_gateway_response(403, waf) == "403_waf"
+
+    aws = (b'{"message":"Authorization header requires \'Credential\' parameter. '
+           b"Authorization header requires 'Signature' parameter.\"}")
+    assert classify_gateway_response(403, aws) == "403_firma_aws"
+
+    assert classify_gateway_response(403, b'{"message":"Forbidden"}') == "403_forbidden"
+    assert classify_gateway_response(401, b'{"message":"Unauthorized"}') == "401_ruteado"
+
+
+def catalog_page(rows, meta=None):
+    body = {"messages": [], "data": rows}
+    if meta is not None:
+        body["meta"] = meta
+    return 200, body
+
+
+def test_el_catalogo_reporta_las_llaves_que_llegaron_sin_asumir_forma():
+    # Rutas no documentadas: lo que se reporta es lo que llego, para que un
+    # cambio de forma de Clip cambie el reporte en vez de tronar un parser.
+    transport = FakeTransport([
+        catalog_page([{"product_id": "p1", "product_name": "Latte", "price": 60.0}],
+                     {"type": "product", "limit": 200}),
+        catalog_page([{"category_id": "c1", "category_name": "Bebidas"}]),
+        catalog_page([]),
+    ])
+    superficies = fetch_catalog(CREDS, transport=transport)
+
+    assert superficies["products"]["renglones"] == 1
+    assert superficies["products"]["llaves"] == {"price": 1, "product_id": 1,
+                                                 "product_name": 1}
+    assert superficies["products"]["meta"] == {"type": "product", "limit": 200}
+    assert superficies["categories"]["renglones"] == 1
+    # Una superficie vacia se lee, y reporta cero. No es un error.
+    assert superficies["modifiers"] == {"leido": True, "renglones": 0,
+                                        "llaves": {}, "meta": None}
+
+
+def test_una_superficie_rota_del_catalogo_no_tumba_las_otras():
+    # Un 403 en `/catalog/modifiers` no dice nada de `/catalog/products`.
+    transport = FakeTransport([
+        catalog_page([{"product_id": "p1"}]),
+        (403, {"message": "Forbidden"}),
+        catalog_page([{"modifier_group_id": "m1"}]),
+    ])
+    superficies = fetch_catalog(CREDS, transport=transport)
+
+    assert superficies["products"]["leido"] is True
+    assert superficies["categories"]["leido"] is False
+    assert superficies["categories"]["status"] == 403
+    assert superficies["modifiers"]["leido"] is True
+
+
+def test_el_catalogo_viaja_con_el_user_agent_propio():
+    # Sin `User-Agent` propio el WAF de Clip contesta 403 y se lee como falta
+    # de alcance. Misma trampa que ya mordio en depositos.
+    transport = FakeTransport([catalog_page([]), catalog_page([]), catalog_page([])])
+    fetch_catalog(CREDS, transport=transport)
+    for enviados in transport.headers:
+        assert enviados["User-Agent"] == BASE_HEADERS["User-Agent"]
+
+
+def test_el_barrido_de_ventas_se_declara_no_medible_si_el_control_contesta_igual():
+    """La prueba que impide volver a publicar un barrido como evidencia.
+
+    Bajo `/catalog` el catch-all **es** el 403 de firma AWS, el mismo sabor que
+    contestan las candidatas. Sin la bandera `medible`, esa lista de 403 se lee
+    como "las rutas existen pero falta alcance", y es falso.
+    """
+    firma = (403, {"message": "Authorization header requires 'Credential' parameter."})
+    transport = FakeTransport([firma] * (1 + len(CATALOG_SALES_CANDIDATES)))
+    resultado = probe_catalog_sales(CREDS, transport=transport)
+
+    assert resultado["control"]["sabor"] == "403_firma_aws"
+    assert set(resultado["candidatas"].values()) == {"403_firma_aws"}
+    assert resultado["distintas_del_control"] == {}
+    assert resultado["medible"] is False
+    assert "NO prueba que no exista" in resultado["nota"]
+
+
+def test_el_barrido_es_medible_cuando_una_candidata_difiere_del_control():
+    respuestas = [(403, {"message": "Authorization header requires 'Credential' parameter."})]
+    for path in CATALOG_SALES_CANDIDATES:
+        if path == "/catalog/orders":
+            respuestas.append(catalog_page([{"order_id": "o1"}]))
+        else:
+            respuestas.append((403, {"message": "Authorization header requires 'Credential' parameter."}))
+    resultado = probe_catalog_sales(CREDS, transport=FakeTransport(respuestas))
+
+    assert resultado["medible"] is True
+    assert resultado["distintas_del_control"] == {"/catalog/orders": "200"}
+    assert "puede ser una ruta real" in resultado["nota"]
+
+
+def test_el_catalogo_no_afirma_que_no_hubo_ventas_por_producto():
+    """`ventas_por_producto` es `null`, no `false`.
+
+    Aqui no se midio la venta: se leyo la carta. Un `false` seria un cero
+    inventado, igual que contar un 401 de depositos como "no hay efectivo".
+    """
+    firma = (403, {"message": "Authorization header requires 'Credential' parameter."})
+    respuestas = [catalog_page([{"product_id": "p1"}]), catalog_page([]), catalog_page([])]
+    respuestas += [firma] * (1 + len(CATALOG_SALES_CANDIDATES))
+    reporte = summarize_catalog(CREDS, transport=FakeTransport(respuestas))
+
+    assert reporte["ventas_por_producto"] is None
+    assert reporte["productos"] == 1
+    assert reporte["barrido_de_ventas"]["medible"] is False
+    assert "la CARTA, no la venta" in reporte["nota"]

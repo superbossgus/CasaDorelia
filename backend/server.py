@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 import os
 import logging
 from pathlib import Path
@@ -43,6 +44,10 @@ import backfill_brand
 import backfill_business_date
 import business_day
 import brands
+
+# Corte de caja: el efectivo no viaja por la API de Clip, asi que el corte que
+# captura la sucursal es la unica fuente de ese dinero (BOS-119).
+import cash_cut
 from app_config import cors_origins, jwt_secret
 from branches_init import brand_for
 from business_day import (
@@ -3345,6 +3350,288 @@ async def import_sales(
             for d in plan.documents[:200]
         ],
     }
+
+
+# ============== CORTE DE CAJA / EFECTIVO (BOS-119) ==============
+#
+# La carga de Clip solo trae lo que cobro la terminal: el efectivo que la app de
+# Clip registra NO viaja por su API (censo de 2,329 cobros en 360 dias, cero
+# rotulados efectivo). Mientras no exista el corte de un dia, el bruto de ese dia
+# es **piso**, no la venta. Estas rutas son el otro lado: lo que cuenta la
+# sucursal al cerrar el cajon.
+#
+# Toda la validacion y la derivacion viven en `cash_cut.py` (modulo puro, con
+# pruebas sin Mongo). Aqui solo esta lo que necesita la base: permisos por
+# sucursal, la marca de la sucursal, y que no se capture el mismo turno dos veces.
+
+
+class CashCutCreate(BaseModel):
+    """Lo que se captura al cerrar. El efectivo del dia NO se captura: se deriva.
+
+    Pedir "cuanto vendiste en efectivo" es pedir una resta de memoria. Aqui van
+    los tres numeros que si se pueden contar y la resta la hace el servidor
+    (`cash_cut.derive_cash_sales`).
+    """
+    cafeteria_id: str
+    # Default: el dia de operacion en curso (UTC-6), no el dia UTC. Un corte de
+    # las 20:30 CDMX es del dia que cerro, no del siguiente.
+    business_date: Optional[str] = None
+    turno: Optional[str] = None
+    fondo_inicial: float
+    efectivo_contado: float
+    retiros: float = 0.0
+    tickets_efectivo: Optional[int] = None
+    notas: Optional[str] = None
+
+
+class CashCutRevise(BaseModel):
+    """Correccion de un corte ya guardado. La razon es obligatoria.
+
+    Solo viajan los campos que se mandan: `model_dump(exclude_unset=True)` es lo
+    que distingue "no lo toques" de "ponlo en cero".
+    """
+    reason: str
+    fondo_inicial: Optional[float] = None
+    efectivo_contado: Optional[float] = None
+    retiros: Optional[float] = None
+    tickets_efectivo: Optional[int] = None
+    notas: Optional[str] = None
+
+
+async def _cash_cut_branch(cafeteria_id: str, current_user: dict) -> dict:
+    """La sucursal del corte, validando que quien captura pueda capturarla.
+
+    Un cajero captura el corte de **su** sucursal. Sin esto, el corte de SJI lo
+    podria cerrar alguien de Tecnoparque, y el efectivo acabaria en la marca
+    equivocada: son dos repartos distintos (ver `brands.py`).
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    if current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO]:
+        own = current_user.get("cafeteria_id")
+        if own and own != cafeteria_id:
+            raise HTTPException(status_code=403,
+                                detail="Solo puedes capturar el corte de tu sucursal")
+
+    cafeteria = await db.cafeterias.find_one(
+        {**tenant_filter, "id": cafeteria_id}, {"_id": 0, "id": 1, "name": 1, "brand": 1}
+    )
+    if not cafeteria:
+        raise HTTPException(status_code=404, detail=f"No existe la sucursal {cafeteria_id}")
+    return cafeteria
+
+
+async def _cash_already_in_sales(cafeteria_id: str, day: str, tenant_filter: dict):
+    """Venta en efectivo que el app ya tenia capturada de ese dia.
+
+    Devuelve `(None, None)` cuando no hay ninguna, para que
+    `cash_cut.compare_with_system` diga "no hay con que comparar" en vez de
+    reportar un faltante del tamaño de todo el efectivo del dia.
+    """
+    rows = await db.sales.find(
+        {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": day,
+         "payment_method": cash_cut.METHOD_CASH},
+        {"_id": 0, "total": 1}
+    ).to_list(5000)
+    if not rows:
+        return None, None
+    return round(sum(float(row.get("total") or 0.0) for row in rows), 2), len(rows)
+
+
+async def _card_total(cafeteria_id: str, day: str, tenant_filter: dict) -> dict:
+    """Lo que la terminal de Clip cobro ese dia. Informativo, para la pantalla."""
+    rows = await db.sales.find(
+        {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": day,
+         "payment_method": {"$ne": cash_cut.METHOD_CASH}},
+        {"_id": 0, "total": 1}
+    ).to_list(5000)
+    return {
+        "gross": round(sum(float(row.get("total") or 0.0) for row in rows), 2),
+        "charges": len(rows),
+    }
+
+
+@api_router.get("/cash-cuts")
+async def get_cash_cuts(
+    cafeteria_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Cortes capturados, con el resumen **por marca**.
+
+    El resumen viaja ya hecho a proposito: si la pantalla sumara los cortes por
+    su cuenta, el primer total que dibujaria seria el de las dos marcas juntas,
+    que es justo lo que esta base no publica.
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    query = {**tenant_filter, **sales_day_window(start_date, end_date)}
+    if cafeteria_id:
+        query["cafeteria_id"] = cafeteria_id
+    elif current_user["role"] in [UserRole.GERENTE, UserRole.CAJERO] and current_user.get("cafeteria_id"):
+        query["cafeteria_id"] = current_user["cafeteria_id"]
+
+    cuts = await db[cash_cut.COLLECTION].find(query, {"_id": 0}).sort(
+        [("business_date", -1), ("turno", 1)]).to_list(1000)
+
+    cafeterias = {c["id"]: c["name"] for c in await db.cafeterias.find(
+        tenant_filter, {"_id": 0, "id": 1, "name": 1}).to_list(100)}
+    for cut in cuts:
+        cut["cafeteria_name"] = cafeterias.get(cut.get("cafeteria_id"), "Desconocida")
+
+    return {
+        "cuts": cuts,
+        "summary": cash_cut.summarize_cuts(cuts),
+        "days_covered": cash_cut.covered_days(cuts),
+    }
+
+
+@api_router.get("/cash-cuts/prefill")
+async def get_cash_cut_prefill(
+    cafeteria_id: str,
+    business_date: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE, UserRole.CAJERO]))
+):
+    """Lo que la pantalla puede proponer antes de contar el cajon.
+
+    Propone **solo** el fondo inicial, y solo porque es el del corte anterior.
+    Lo contado y los retiros se cuentan: un default ahi se acepta sin contar, y
+    entonces el corte dejaria de medir algo.
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    await _cash_cut_branch(cafeteria_id, current_user)
+    day = business_day.to_business_date(business_date) or business_day.today()
+
+    previous = await db[cash_cut.COLLECTION].find_one(
+        {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": {"$lt": day}},
+        {"_id": 0}, sort=[("business_date", -1)]
+    )
+    existing = await db[cash_cut.COLLECTION].find_one(
+        {**tenant_filter, "cafeteria_id": cafeteria_id, "business_date": day}, {"_id": 0}
+    )
+    sistema_efectivo, sistema_tickets = await _cash_already_in_sales(
+        cafeteria_id, day, tenant_filter)
+
+    return {
+        "business_date": day,
+        "turnos": list(cash_cut.TURNOS),
+        "prefill": cash_cut.prefill(previous),
+        # Si ya hay corte de ese dia, la pantalla tiene que ofrecer corregirlo,
+        # no capturar otro: dos cortes del mismo turno duplican la venta.
+        "existing": existing,
+        "tarjeta": await _card_total(cafeteria_id, day, tenant_filter),
+        "sistema_efectivo": sistema_efectivo,
+        "sistema_tickets": sistema_tickets,
+        "aviso": ("El efectivo no viene de la API de Clip: mientras no exista el "
+                  "corte de un dia, el bruto de ese dia es piso, no la venta."),
+    }
+
+
+@api_router.post("/cash-cuts")
+async def create_cash_cut(
+    payload: CashCutCreate,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE, UserRole.CAJERO]))
+):
+    """Guarda el corte de caja de un dia/turno. Un turno se captura una vez."""
+    tenant_filter = get_tenant_filter(current_user)
+    cafeteria = await _cash_cut_branch(payload.cafeteria_id, current_user)
+
+    try:
+        day = business_day.to_business_date(payload.business_date) or business_day.today()
+    except business_day.BusinessDayError as exc:
+        raise HTTPException(status_code=400, detail=f"Dia de operacion invalido: {exc}")
+
+    sistema_efectivo, sistema_tickets = await _cash_already_in_sales(
+        payload.cafeteria_id, day, tenant_filter)
+
+    try:
+        cut = cash_cut.build_cut(
+            cafeteria_id=payload.cafeteria_id,
+            # La marca la manda la sucursal, nunca la pantalla: asi el efectivo
+            # no puede entrar a la marca equivocada por un campo del formulario.
+            brand=cafeteria.get("brand") or brand_for(payload.cafeteria_id),
+            business_date=day,
+            fondo_inicial=payload.fondo_inicial,
+            efectivo_contado=payload.efectivo_contado,
+            retiros=payload.retiros,
+            turno=payload.turno,
+            tickets_efectivo=payload.tickets_efectivo,
+            notas=payload.notas,
+            tenant_id=current_user.get("tenant_id"),
+            created_by=current_user.get("user_id"),
+            created_by_name=current_user.get("email"),
+            sistema_efectivo=sistema_efectivo,
+            sistema_tickets=sistema_tickets,
+        )
+    except cash_cut.CashCutError as exc:
+        # 400 con el mensaje tal cual: todos dicen que numero esta mal y por que.
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    existing = await db[cash_cut.COLLECTION].find_one(
+        cash_cut.cut_filter(cafeteria_id=payload.cafeteria_id, business_date=day,
+                            turno=cut["turno"], tenant_id=current_user.get("tenant_id")),
+        {"_id": 0}
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Ya hay corte del turno {cut['turno']} del {day} en esta sucursal "
+                    f"(id {existing['id']}). Corrigelo en vez de capturar otro: dos "
+                    "cortes del mismo turno duplican la venta del dia.")
+        )
+
+    try:
+        await db[cash_cut.COLLECTION].insert_one(dict(cut))
+    except DuplicateKeyError:
+        # La carrera entre dos capturas simultaneas la corta el indice unico, no
+        # la consulta de arriba.
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ya hay corte del turno {cut['turno']} del {day} en esta sucursal"
+        )
+
+    cut["cafeteria_name"] = cafeteria.get("name")
+    return cut
+
+
+@api_router.put("/cash-cuts/{cut_id}")
+async def revise_cash_cut(
+    cut_id: str,
+    payload: CashCutRevise,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.GERENTE]))
+):
+    """Corrige un corte guardando el monto anterior, quien y por que.
+
+    No lo puede hacer un cajero a proposito: reescribir un monto de dinero ya
+    publicado es una operacion de supervision, y queda con nombre en
+    `revisions`.
+    """
+    tenant_filter = get_tenant_filter(current_user)
+    changes = payload.model_dump(exclude_unset=True, exclude={"reason"})
+
+    existing = await db[cash_cut.COLLECTION].find_one(
+        {**tenant_filter, "id": cut_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"No existe el corte {cut_id}")
+    await _cash_cut_branch(existing["cafeteria_id"], current_user)
+
+    sistema_efectivo, sistema_tickets = await _cash_already_in_sales(
+        existing["cafeteria_id"], existing["business_date"], tenant_filter)
+
+    try:
+        revised = cash_cut.revise_cut(
+            existing, changes,
+            reason=payload.reason,
+            user_id=current_user.get("user_id"),
+            user_name=current_user.get("email"),
+            sistema_efectivo=sistema_efectivo,
+            sistema_tickets=sistema_tickets,
+        )
+    except cash_cut.CashCutError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    await db[cash_cut.COLLECTION].replace_one(
+        {**tenant_filter, "id": cut_id}, dict(revised))
+    return revised
 
 
 # ============== POS (POINT OF SALE) ROUTES ==============
@@ -6660,6 +6947,30 @@ async def stamp_pending_brands():
         logger.warning("ventas de una sucursal sin marca en el catalogo, quedan fuera del "
                        "corte por marca: %s -> %s",
                        summary["unmapped"], summary["unmapped_cafeterias"])
+
+
+@app.on_event("startup")
+async def ensure_cash_cut_index():
+    """Indice unico del corte de caja: un turno por sucursal por dia (BOS-119).
+
+    Es la unica defensa contra el doble corte en una carrera: la consulta de
+    `POST /api/cash-cuts` ve "no hay corte" en las dos peticiones y las dos
+    insertan, y el efectivo de ese dia sale al doble. El indice si las corta.
+
+    Se crea al arrancar por el mismo motivo que los backfills de arriba: para
+    que no dependa de un paso manual de despliegue. Si ya existieran duplicados
+    en la base, la creacion falla y eso se **registra** — el API no se cae, pero
+    el log dice exactamente que hay que limpiar.
+    """
+    try:
+        await db[cash_cut.COLLECTION].create_index(
+            [("tenant_id", 1), ("cafeteria_id", 1), ("business_date", 1), ("turno", 1)],
+            unique=True, name="corte_unico_por_turno",
+        )
+    except Exception:  # pragma: no cover - el API no se cae por el indice
+        logger.exception("no se pudo crear el indice unico de %s: revisa si hay "
+                         "cortes duplicados de (sucursal, dia, turno)",
+                         cash_cut.COLLECTION)
 
 
 @app.on_event("shutdown")

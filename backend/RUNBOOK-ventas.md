@@ -350,6 +350,72 @@ El efecto de dejar una prueba no es el monto: el $0.01 del 26/08 partia el hueco
 de 47 dias de Tecnoparque en dos (21 + 25) y pintaba ese dia como un dia con
 venta de un centavo. Borrado en BOS-148.
 
+## Cifra parcial contra total del dia (lo que un corte puede y no puede citar)
+
+El reporte de apertura tiene tres cortes (08:00, 15:00 y 20:00 CDMX) y la carga
+tiene tres slots, cada uno 15 min antes. Ningun corte puede citar la cifra del dia
+en curso como «venta del dia», y la razon **no** es una hora de apertura:
+
+> Una cifra del dia `D` solo es citable como total si **alguna carga pidio `D`
+> despues de que `D` cerro**. Una carga que corre a las 07:45 —o a las 14:45, o a
+> las 19:45— esta parada *dentro* de `D`: por definicion no vio el resto del dia,
+> exista o no un cobro temprano.
+
+De ahi sale, sin ninguna hora de apertura, que **el unico corte que puede hablar de
+un dia cerrado es el de las 08:00 del dia siguiente** (su carga de las 07:45 vuelve
+a pedir el dia anterior completo con `--catch-up 1`).
+
+Hay que decirlo como condicion estructural y no como un umbral de apertura porque
+el umbral **caduca**: hasta el 05/10/2026 la defensa de hecho era que SJI nunca
+cobraba antes de las 07:45 (record 09:16, que duro cinco dias), y el 06/10 abrio a
+las 08:25. El colchon paso de 1 h 31 min a 40 min. El dia que un cobro caiga antes
+de las 07:45, un corte que confie en el umbral publica los primeros minutos del dia
+como venta del dia — y un numero truncado sin rotulo es peor que no tener numero.
+
+Quien decide es un comando, no la memoria de quien escribe el reporte:
+
+```
+# lo que el corte de las 08:00 necesita: ayer (ya cerrado) y hoy (en curso)
+python backend/corte_window.py --db casa_dorelia --branch sji \
+    --carga-at 2026-10-07T13:45:57+00:00
+```
+
+`--carga-at` es el instante de la corrida del cargador, **del registro de la
+corrida** (la tarea que creo la rutina `03f5e143`), no de la base. Es obligatorio
+en la practica por una razon que se ve igual a un cargador muerto: una corrida que
+inserta cero renglones **no deja rastro en `sales`**, asi que `max(imported_at)`
+prueba el ultimo *insert*, nunca la ultima corrida. Sin citar la corrida, un dia
+sin cobros y un cargador caido son indistinguibles — y el comando lo dice (estado
+`sin_evidencia`, codigo de salida 2) en lugar de elegir uno.
+
+Los cinco estados y lo que cada uno autoriza:
+
+| estado | que significa | se publica como |
+|---|---|---|
+| `sin_evidencia` | cero renglones y sin citar la corrida | nada: hay que citar la corrida |
+| `sin_carga` | la corrida citada es anterior al inicio del dia | «no corrio la carga», con la corrida nombrada |
+| `sin_cifra` | la carga alcanzo el dia y no trajo cobros | «no observable todavia» |
+| `parcial` | hay cobros, la cobertura termina antes del cierre | la cifra **con su hora de corte** y lo que falta del dia |
+| `final` | una carga pidio el dia despues de que cerro | bruto del dia con tarjeta |
+
+`final` con cero renglones es un cero **medido** (dia cerrado, o cero con tarjeta),
+no un hueco: es lo que lo separa de `sin_cifra`.
+
+Dos cosas que este comando **no** hace, a proposito:
+
+- **No estima ni completa el dia.** Rotula. Un parcial sale con su hora de corte y
+  con cuanto dia quedo sin medir; no proyecta el resto.
+- **No habla de efectivo.** Eso es otro eje (`cash_cut.py`): una cifra `final`
+  sigue siendo *piso* mientras no haya corte de caja. Los dos rotulos van juntos en
+  el reporte y ninguno sustituye al otro.
+
+La sucursal se separa por `clip_branch` (`sji` / `tecnoparque`). `brand` **no**
+separa sucursales — separa las dos marcas (`casa-dorelia` / `le-pain-dore`) — y
+filtrar por ahi devuelve cero renglones en silencio, que se lee exactamente igual
+que «no cobro». El conteo por `cafeteria_id` va como control: si no coincide, hay
+carga vieja sin `clip_branch` y la salida lo dice en vez de publicar un conteo
+corto.
+
 ## Corte del dia (solo lectura, no escribe)
 
 ```

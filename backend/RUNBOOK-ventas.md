@@ -380,6 +380,26 @@ python backend/corte_window.py --db casa_dorelia --branch sji \
     --carga-at 2026-10-07T13:45:57+00:00
 ```
 
+El corte lo corre desde un arbol **fijado**, por la misma razon que la carga
+(BOS-119): en `CasaDorelia-wt` otras tareas cambian de rama, y un `checkout` deja
+el corte siguiente sin comando.
+
+```
+C:\Users\adminviter\.paperclip\instances\default\workspaces\d57909c4-8c92-4632-b4e9-abcec087cf57\corte-wt
+```
+
+Esta en `HEAD` desprendido. Si se perdiera, se recrea desde `CasaDorelia-wt` con
+dos comandos — el codigo no vive solo en un disco:
+
+```
+git fetch origin
+git worktree add --detach ../corte-wt origin/feat/bos-71-clip-ingesta
+```
+
+**No es el mismo arbol que `clip-daily-wt`.** Ese esta fijado a una version mas
+vieja del cargador a proposito y mover su pin cambia el codigo que toca dinero; no
+se mueve para traer este comando.
+
 `--carga-at` es el instante de la corrida del cargador, **del registro de la
 corrida** (la tarea que creo la rutina `03f5e143`), no de la base. Es obligatorio
 en la practica por una razon que se ve igual a un cargador muerto: una corrida que

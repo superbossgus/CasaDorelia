@@ -356,6 +356,11 @@ APERTURA = {
     "source": {"label": "hoja", "url": "https://drive.google.com/file/d/X/view",
                "modified_at": "2026-09-27T04:41:54Z",
                "rows": 4, "delivered": 2, "pending": 2},
+    # La autoridad es la tarjeta del consejo, no la columna Estatus de la hoja:
+    # #9 sigue `Pendiente` en la hoja y en cambio ya esta cerrado por tarjeta.
+    "authority": {"label": "tarjeta", "ref": "32a502c4",
+                  "resolved_at": "2026-09-21T02:43:42Z", "items": 3,
+                  "open_refs": ["#27", "Anexo J"], "closed_refs": ["#9"]},
     "blockers": [{"ref": "#27", "title": "Materia prima"},
                  {"ref": "Anexo J", "title": "Permisos", "off_sheet": True}],
     "pending_rows": [{"ref": "#27", "title": "Materia prima"},
@@ -401,14 +406,136 @@ def test_no_se_puede_recortar_la_lista_y_dejar_el_numero(tmp_path):
     assert "1 renglones" in str(exc.value)
 
 
-def test_un_bloqueante_que_ya_no_esta_pendiente_en_la_hoja_truena(tmp_path):
-    # Si la hoja ya marco #27 como entregado y nadie lo saco de los
-    # bloqueantes, el tablero lo diria abierto para siempre.
+def test_un_bloqueante_fuera_de_los_pendientes_de_la_hoja_declara_por_que(tmp_path):
+    # Si la hoja ya no trae #27 entre sus pendientes, el renglon tiene que decir
+    # por que: `sheet_status: Entregado` (la hoja lo dio por hecho) u `off_sheet`
+    # (no es renglon de la hoja). Callarlo es lo que dejaba al panel afirmando un
+    # estatus que la hoja ya no dice.
     with pytest.raises(DashboardError) as exc:
         load_apertura(apertura_file(tmp_path,
                                     pending_rows=[{"ref": "#9", "title": "Tapete"},
                                                   {"ref": "#10", "title": "Toldo"}]))
     assert "#27" in str(exc.value)
+    assert "sheet_status" in str(exc.value)
+
+
+def test_la_hoja_no_es_la_autoridad_un_entregado_sin_confirmar_si_se_dibuja(tmp_path):
+    # El caso que borraba renglones del tablero (BOS-202): la hoja marco #41
+    # `Entregado` el 27/09 y el responsable nunca lo confirmo, asi que el consejo
+    # lo cuenta abierto. Se dibuja, y se dibuja con el rotulo que dice las dos
+    # cosas: lo que afirma la hoja y lo que falta para creerle.
+    a = load_apertura(apertura_file(
+        tmp_path,
+        authority={"label": "tarjeta", "ref": "32a502c4",
+                   "resolved_at": "2026-09-21T02:43:42Z", "items": 2,
+                   "open_refs": ["#41", "#27"], "closed_refs": []},
+        blockers=[{"ref": "#41", "title": "Campana", "sheet_status": "Entregado"},
+                  {"ref": "#27", "title": "Materia prima"}]))
+    campana = a["blockers"][0]
+    assert campana["sheet_conflict"] is True
+    assert campana["sheet_label"] == (
+        "la hoja dice «Entregado» · falta confirmacion del responsable")
+    # El renglon que si sigue `Pendiente` en la hoja no lleva ese rotulo: el
+    # contraste es lo que hace legible el caso de arriba.
+    assert a["blockers"][1]["sheet_conflict"] is False
+
+    # Y llega dibujado a la pagina, no solo al modelo.
+    html = render_html(dict(model([sale("2026-10-03", 200.0)]), apertura=a))
+    assert "Campana" in html
+    assert "item.sheet_label" in html
+
+
+def test_un_renglon_que_el_consejo_cuenta_abierto_no_puede_quedar_sin_dibujar(tmp_path):
+    # Esta es la validacion que impide que vuelva a pasar: #1 quedo sin marcar en
+    # la tarjeta —o sea abierto— y el panel no lo dibuja. Antes eso era un
+    # archivo perfectamente valido, y el renglon simplemente no existia.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path,
+            authority={"label": "tarjeta", "ref": "32a502c4",
+                       "resolved_at": "2026-09-21T02:43:42Z", "items": 3,
+                       "open_refs": ["#27", "Anexo J", "#1"], "closed_refs": []}))
+    assert "#1" in str(exc.value)
+    assert "no dibuja" in str(exc.value)
+
+
+def test_un_renglon_cerrado_por_tarjeta_no_se_redibuja_como_pendiente(tmp_path):
+    # El error en el otro sentido (#23 y #25): la hoja los sigue marcando
+    # `Pendiente` y el consejo ya los confirmo cerrados el 21/09. Siguen en el
+    # espejo de la hoja, pero el panel no los pide otra vez.
+    a = load_apertura(apertura_file(tmp_path))
+    tapete = [p for p in a["pending_rows"] if p["ref"] == "#9"][0]
+    assert tapete["board_closed"] is True
+    assert a["authority"]["closed_in_sheet"] == ["#9"]
+    # Y no puede colarse como bloqueante: la tarjeta no lo cuenta abierto.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, blockers=[{"ref": "#27", "title": "Materia prima"},
+                                {"ref": "#9", "title": "Tapete"},
+                                {"ref": "Anexo J", "title": "Permisos",
+                                 "off_sheet": True}]))
+    assert "#9" in str(exc.value)
+
+    # El renderizador lo saca de la lista dibujada y dice cuantos quito, en vez
+    # de publicar una lista mas corta sin explicacion.
+    html = render_html(dict(model([sale("2026-10-03", 200.0)]), apertura=a))
+    assert "p.board_closed" in html
+    assert "closed_in_sheet" in html
+
+
+def test_la_tarjeta_del_consejo_no_se_puede_recortar_a_medias(tmp_path):
+    # Mismo control que los conteos de la hoja: `items` tiene que cuadrar con la
+    # suma, asi que no se puede quitar media tarjeta y dejar el resto en pie.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path,
+            authority={"label": "tarjeta", "ref": "32a502c4",
+                       "resolved_at": "2026-09-21T02:43:42Z", "items": 9,
+                       "open_refs": ["#27", "Anexo J"], "closed_refs": ["#9"]}))
+    assert "9 renglones" in str(exc.value)
+
+    # Y un renglon no puede estar abierto y cerrado al mismo tiempo.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path,
+            authority={"label": "tarjeta", "ref": "32a502c4",
+                       "resolved_at": "2026-09-21T02:43:42Z", "items": 3,
+                       "open_refs": ["#27", "Anexo J"], "closed_refs": ["#27"]}))
+    assert "abierto y cerrado" in str(exc.value)
+
+
+def test_sin_el_estado_del_consejo_el_panel_no_se_dibuja(tmp_path):
+    # Sin `authority` la lista volveria a armarse desde la columna Estatus de la
+    # hoja. Antes que publicar eso, el panel se cae y dice por que.
+    data = json.loads(json.dumps(APERTURA))
+    data.pop("authority")
+    path = tmp_path / "sin-autoridad.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(str(path))
+    assert "authority" in str(exc.value)
+
+
+def test_un_estatus_de_hoja_declarado_contra_la_hoja_truena(tmp_path):
+    # Lo declarado se verifica contra el espejo de la hoja en los dos sentidos:
+    # un `Entregado` escrito sobre un renglon que la hoja sigue trayendo entre
+    # sus pendientes es una afirmacion falsa sobre la evidencia.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, blockers=[{"ref": "#27", "title": "Materia prima",
+                                 "sheet_status": "Entregado"},
+                                {"ref": "Anexo J", "title": "Permisos",
+                                 "off_sheet": True}]))
+    assert "sigue trayendo" in str(exc.value)
+
+    # Y un renglon declarado fuera de la hoja no puede declarar estatus en ella.
+    with pytest.raises(DashboardError) as exc:
+        load_apertura(apertura_file(
+            tmp_path, blockers=[{"ref": "#27", "title": "Materia prima"},
+                                {"ref": "Anexo J", "title": "Permisos",
+                                 "off_sheet": True,
+                                 "sheet_status": "Entregado"}]))
+    assert "off_sheet" in str(exc.value)
 
 
 def test_el_anexo_del_contrato_no_es_renglon_de_la_hoja_y_eso_se_declara(tmp_path):
@@ -563,9 +690,11 @@ def test_el_conteo_de_responsables_se_cuenta_sobre_lo_dibujado(tmp_path):
                              "off_sheet": True}]))
     refs = {str(b["ref"]) for b in a["blockers"]}
     dibujados = a["blockers"] + [p for p in a["pending_rows"]
-                                 if str(p["ref"]) not in refs]
-    # 2 bloqueantes + 1 pendiente (#9); #27 no se repite.
-    assert len(dibujados) == 3
+                                 if str(p["ref"]) not in refs
+                                 and not p.get("board_closed")]
+    # 2 bloqueantes y ningun pendiente: #27 no se repite y #9 esta cerrado por
+    # la tarjeta del consejo, asi que tampoco se dibuja.
+    assert len(dibujados) == 2
     assert sum(1 for r in dibujados if r["owner_named"]) == 1
     # El rotulo del conteo lo arma la pagina con estos campos, no con un numero
     # escrito en el JSON.

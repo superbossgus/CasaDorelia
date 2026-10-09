@@ -60,6 +60,30 @@ conteo que vive aqui deja de depender de que alguien abra una tarjeta.
 el total de la hoja) y calcula la antiguedad del corte, para que el panel no
 pueda decir "al dia" porque alguien escribio eso una vez.
 
+### La hoja es evidencia; la autoridad es la confirmacion del consejo
+
+Quien dice que un bloqueante esta abierto **no** es la columna *Estatus* de la
+hoja: es el estado de confirmacion del consejo (`authority`, la tarjeta de
+bloqueantes de BOS-5). Los dos se desvian en los dos sentidos, y el error no se
+delata en el titular porque los conteos pueden coincidir estando mal renglon por
+renglon (BOS-202: «4 cerrados, 6 abiertos» con 4 de 10 renglones equivocados):
+
+- la hoja marco `Entregado` **#41** (campana) y **#1** (cables sueltos) el
+  27/09, pero el responsable nunca lo confirmo, asi que el consejo los sigue
+  contando abiertos. Armar la lista desde la hoja los borraba del tablero —y son
+  justo los dos que se cierran con una frase y sin gastar un peso.
+- la hoja sigue marcando `Pendiente` **#23** (pan) y **#25** (cafe), y en cambio
+  el consejo los confirmo cerrados el 21/09. Dibujarlos como pendientes pide dos
+  veces algo que ya esta hecho.
+
+De ahi las dos validaciones que sostienen el arreglo: **todo renglon que la
+tarjeta cuenta abierto tiene que estar dibujado** (eso es lo que hace imposible
+que #41 y #1 vuelvan a desaparecer) y **nada que la tarjeta cuente cerrado se
+dibuja como abierto**. El estatus de la hoja se sigue publicando, pero como
+rotulo contrastado contra su espejo (`sheet_status`, ver
+`_normalize_sheet_status`): un `Entregado` que el consejo no confirmo se dibuja
+con el rotulo que lo dice, no se esconde ni se da por hecho.
+
 Con `--apertura-optional` esa validacion deja de ser fatal: el panel se cae solo
 y la tarjeta publica la razon. Es para el republicado automatico, donde la
 alternativa a un panel desfasado no es "ningun tablero" sino el tablero de ayer
@@ -315,6 +339,127 @@ def _normalize_overdue(row: Dict[str, Any], where: str) -> None:
     row["overdue_label"] = "vencido desde el " + cut.strftime("%d/%m")
 
 
+# El estatus de la hoja, y sus dos rotulos. Viven aqui por la misma razon que
+# los del responsable: el renderizador solo imprime, asi que no puede haber una
+# segunda copia del texto que pueda quedar en desacuerdo con esta.
+#
+# El rotulo de `Entregado` es el que importa: dice las dos cosas a la vez —lo
+# que afirma la hoja y lo que falta para creerle—, porque esconder una de las dos
+# es como un renglon abierto desaparece del tablero (BOS-202).
+SHEET_PENDING = "Pendiente"
+SHEET_DELIVERED = "Entregado"
+SHEET_LABELS = {
+    SHEET_PENDING: "la hoja dice «Pendiente»",
+    SHEET_DELIVERED: "la hoja dice «Entregado» · falta confirmacion del responsable",
+}
+
+
+def _normalize_sheet_status(blocker: Dict[str, Any], pending_refs: set,
+                            have_sheet: bool) -> None:
+    """Rotula el estatus en la hoja de un bloqueante, contrastado contra la hoja.
+
+    El estatus se dibuja, pero deja de ser la autoridad: aqui es un dato de la
+    *evidencia*, y el rotulo lo calcula esta funcion para que no se pueda
+    escribir a mano un «Pendiente en la hoja» que la hoja ya no dice.
+
+    Un bloqueante que no esta entre los renglones pendientes de la hoja tiene que
+    declarar por que: `sheet_status: "Entregado"` (la hoja lo dio por hecho y el
+    responsable no lo confirmo) u `off_sheet: true` (no es renglon de la hoja,
+    como los anexos del contrato). Antes esto tronaba sin tercera opcion, y esa
+    era la trampa: la unica salida era borrar el renglon del panel.
+
+    Lo declarado se verifica contra el espejo de la hoja en los dos sentidos, asi
+    que ni un `Entregado` ni un `Pendiente` escritos de mas sobreviven a que la
+    hoja se mueva.
+    """
+    ref = str(blocker.get("ref"))
+    where = f"el bloqueante {ref}"
+    declared = blocker.get("sheet_status")
+    if blocker.get("off_sheet"):
+        if declared is not None:
+            raise DashboardError(
+                f"{where}: se declara `off_sheet` y ademas `sheet_status`. Un "
+                "renglon que no esta en la hoja no tiene estatus en la hoja")
+        return
+    in_sheet = ref in pending_refs
+    if declared is None:
+        if in_sheet:
+            declared = SHEET_PENDING
+        else:
+            raise DashboardError(
+                f"{where}: no esta entre los renglones «{SHEET_PENDING}» de la "
+                f"hoja y no declara `sheet_status`. Si la hoja ya lo marco "
+                f"«{SHEET_DELIVERED}» eso se dice —el consejo lo cuenta abierto "
+                "y el renglon se dibuja con ese rotulo—; si no es renglon de la "
+                "hoja, va `off_sheet: true`")
+    if declared not in SHEET_LABELS:
+        raise DashboardError(
+            f"{where}: `sheet_status` tiene que ser «{SHEET_PENDING}» o "
+            f"«{SHEET_DELIVERED}», no {declared!r}")
+    if have_sheet:
+        if declared == SHEET_PENDING and not in_sheet:
+            raise DashboardError(
+                f"{where}: se declara «{SHEET_PENDING}» pero no esta entre los "
+                "renglones pendientes de la hoja")
+        if declared == SHEET_DELIVERED and in_sheet:
+            raise DashboardError(
+                f"{where}: se declara «{SHEET_DELIVERED}» pero la hoja lo sigue "
+                "trayendo entre sus pendientes")
+    blocker["sheet_status"] = declared
+    blocker["sheet_label"] = SHEET_LABELS[declared]
+    blocker["sheet_conflict"] = declared == SHEET_DELIVERED
+
+
+def _load_authority(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """El estado de confirmacion del consejo: quien decide que sigue abierto.
+
+    Es la tarjeta de bloqueantes (`request_checkbox_confirmation` en BOS-5): lo
+    que quedo marcado esta cerrado por confirmacion, y lo que quedo sin marcar
+    se cuenta abierto. Viaja declarado en el JSON porque este modulo no habla
+    con el tablero de tareas —solo lee venta—, y por eso trae el mismo tipo de
+    control que los conteos de la hoja: `items` tiene que cuadrar con la suma de
+    abiertos y cerrados, para que no se pueda recortar media tarjeta y dejar el
+    resto en pie.
+    """
+    if "authority" not in data:
+        raise DashboardError(
+            "el archivo de apertura no trae `authority`: sin el estado de "
+            "confirmacion del consejo la lista volveria a armarse desde la "
+            "columna Estatus de la hoja, que es evidencia y no autoridad")
+    auth = dict(data["authority"])
+    for key in ("label", "ref", "resolved_at", "items", "open_refs", "closed_refs"):
+        if key not in auth:
+            raise DashboardError(f"el archivo de apertura no trae `authority.{key}`")
+
+    open_refs = [str(ref) for ref in auth["open_refs"]]
+    closed_refs = [str(ref) for ref in auth["closed_refs"]]
+    for name, refs in (("open_refs", open_refs), ("closed_refs", closed_refs)):
+        if len(set(refs)) != len(refs):
+            raise DashboardError(f"`authority.{name}` trae un renglon repetido")
+    both = sorted(set(open_refs) & set(closed_refs))
+    if both:
+        raise DashboardError(
+            "la tarjeta no puede contar el mismo renglon abierto y cerrado: "
+            + ", ".join(both))
+    if len(open_refs) + len(closed_refs) != auth["items"]:
+        raise DashboardError(
+            f"la tarjeta dice {auth['items']} renglones pero se declaran "
+            f"{len(open_refs)} abiertos + {len(closed_refs)} cerrados")
+
+    cut = _local_datetime(auth["resolved_at"])
+    if cut is None:
+        raise DashboardError(
+            f"`authority.resolved_at` no es una fecha: {auth['resolved_at']}")
+    # Con hora, y en local como todo el resto de la pagina. La tarjeta se
+    # resolvio a las 02:43Z, que es el **20/09 a las 20:43** en CDMX: una
+    # etiqueta de solo fecha dice un dia distinto segun el huso con que se lea, y
+    # este panel ya convive con un reporte que cita la fecha UTC.
+    auth["resolved_label"] = cut.strftime("%d/%m/%Y %H:%M")
+    auth["open_refs"] = open_refs
+    auth["closed_refs"] = closed_refs
+    return auth
+
+
 def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Panel de pendientes operativos, desde un JSON aparte y con controles.
 
@@ -323,17 +468,23 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
     conocer a ninguna empresa en particular, y para que el dia que la hoja se
     mueva se edite un JSON de 40 renglones, no la plantilla.
 
-    Tres controles, porque un panel escrito a mano es justo el que se desfasa:
+    Los controles, porque un panel escrito a mano es justo el que se desfasa:
 
     1. `entregados + pendientes == renglones`. Un conteo que no cuadra con el
        total de la hoja esta viejo, y un numero viejo arriba del tablero es peor
        que no tenerlo.
     2. Si viene la lista de pendientes, tiene que tener tantos renglones como
        dice el conteo. Asi no se puede recortar la lista y dejar el numero.
-    3. Cada bloqueante tiene que estar en la lista de pendientes (por `ref`), o
-       traer `fuera_de_hoja: true` dicho explicitamente (el caso de los anexos
-       del contrato, que no son renglones de la hoja).
-    4. Un renglon nombrado tiene que declarar si su dueño lo confirmo, y una
+    3. **Todo lo que la tarjeta del consejo cuenta abierto tiene que estar
+       dibujado como bloqueante, y nada que cuente cerrado puede estarlo.** Esta
+       es la regla que reemplazo a "cada bloqueante tiene que estar Pendiente en
+       la hoja", que era la que borraba del tablero un renglon abierto en cuanto
+       la hoja lo marcaba `Entregado` (BOS-202).
+    4. Un bloqueante que no esta entre los pendientes de la hoja declara por que
+       —`sheet_status: "Entregado"` u `off_sheet: true`— y lo declarado se
+       verifica contra la hoja en los dos sentidos (ver
+       `_normalize_sheet_status`).
+    5. Un renglon nombrado tiene que declarar si su dueño lo confirmo, y una
        confirmacion tiene que citar donde consta (ver `_normalize_owner`).
 
     La antiguedad del corte y el rotulo de vencido se *calculan* contra la fecha
@@ -371,13 +522,46 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
     blockers = [dict(b) for b in data["blockers"]]
     if not blockers:
         raise DashboardError("el archivo de apertura no trae un solo bloqueante")
-    if pending_rows:
-        refs = {str(row.get("ref")) for row in pending_rows}
-        for blocker in blockers:
-            if not blocker.get("off_sheet") and str(blocker.get("ref")) not in refs:
-                raise DashboardError(
-                    f"el bloqueante {blocker.get('ref')} no esta entre los "
-                    "pendientes de la hoja (ni se declara `off_sheet`)")
+
+    # La autoridad. Las dos comparaciones van en los dos sentidos a proposito:
+    # la primera es la que impide que un renglon abierto desaparezca del panel
+    # (el caso #41 / #1), y la segunda la que impide volver a pedir algo que el
+    # consejo ya confirmo cerrado aunque la hoja siga diciendo «Pendiente» (el
+    # caso #23 / #25). Un panel que solo valide una de las dos deja el error
+    # vivo en el otro sentido, y el titular no lo delata.
+    authority = _load_authority(data)
+    drawn = [str(b.get("ref")) for b in blockers]
+    if len(set(drawn)) != len(drawn):
+        raise DashboardError("la lista de bloqueantes trae un `ref` repetido")
+    missing = [ref for ref in authority["open_refs"] if ref not in drawn]
+    if missing:
+        raise DashboardError(
+            "el consejo cuenta abiertos renglones que el panel no dibuja: "
+            + ", ".join(missing) + ". Son los que se borran del tablero cuando "
+            "la lista se arma desde la columna Estatus de la hoja")
+    extra = [ref for ref in drawn if ref not in authority["open_refs"]]
+    if extra:
+        raise DashboardError(
+            "el panel dibuja como bloqueante lo que la tarjeta del consejo no "
+            "cuenta abierto: " + ", ".join(extra))
+
+    pending_refs = {str(row.get("ref")) for row in pending_rows}
+    for blocker in blockers:
+        _normalize_sheet_status(blocker, pending_refs, bool(pending_rows))
+
+    # Cerrado por confirmacion del consejo, aunque la hoja siga diciendo
+    # «Pendiente». El renglon no se dibuja como pendiente —seria pedir dos veces
+    # algo ya hecho— pero tampoco se borra en silencio: el panel publica cuantos
+    # y cuales son, porque esa discrepancia es un dato de la hoja.
+    closed_refs = set(authority["closed_refs"])
+    for row in pending_rows:
+        if str(row.get("ref")) in closed_refs:
+            row["board_closed"] = True
+            row["board_closed_label"] = (
+                "cerrado por confirmacion del consejo el "
+                + authority["resolved_label"])
+    authority["closed_in_sheet"] = [str(row.get("ref")) for row in pending_rows
+                                    if row.get("board_closed")]
 
     # El mismo `ref` es el mismo renglon de la hoja, asi que el responsable se
     # escribe **una vez** —en el bloqueante— y el pendiente homonimo lo hereda.
@@ -412,6 +596,7 @@ def load_apertura(path: str, *, now: Optional[datetime] = None) -> Dict[str, Any
         "title": data["title"],
         "hint": data.get("hint"),
         "source": source,
+        "authority": authority,
         "blockers": blockers,
         "pending_rows": pending_rows,
         "pending_title": data.get("pending_title"),
@@ -1004,6 +1189,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .open-list .unconf { color: var(--warning); }
   .open-list .late { color: var(--critical); }
   .open-list .who-note { display: block; margin-top: 1px; }
+  /* Lo que dice la hoja. Renglon propio y no chip en linea, porque es una frase
+     y porque el caso que importa —la hoja dice `Entregado` y el consejo lo
+     cuenta abierto— tiene que leerse completo, no recortado. */
+  .open-list .sheet { display: block; font-size: 12px; margin-top: 2px;
+    color: var(--text-muted); }
+  .open-list .sheet.conflict { color: var(--warning); }
+  .open-list .sheet.done { color: var(--good); }
   .open-rest { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); }
   .open-rest h3 { font-size: 13px; font-weight: 600; margin: 0 0 3px;
     color: var(--text-primary); }
@@ -1726,11 +1918,14 @@ _TEMPLATE = r"""<!DOCTYPE html>
     document.getElementById("apertura-title").textContent = A.title;
     document.getElementById("apertura-hint").textContent = A.hint || "";
 
-    // Los pendientes que ya salen arriba como bloqueantes no se repiten. Se
-    // calcula aqui, antes de los numeros de cabecera, porque el conteo de
-    // responsables es sobre los renglones **dibujados**: contar los 18 de la
-    // hoja diria que faltan nombres en renglones que esta lista no muestra.
+    // Los pendientes que ya salen arriba como bloqueantes no se repiten, y los
+    // que el consejo confirmo cerrados no se dibujan como pendientes aunque la
+    // hoja los siga marcando asi: pedir dos veces algo ya hecho cuesta lo mismo
+    // que no pedirlo. Se calcula aqui, antes de los numeros de cabecera, porque
+    // el conteo de responsables es sobre los renglones **dibujados**: contar los
+    // 18 de la hoja diria que faltan nombres en renglones que no se muestran.
     var others = (A.pending_rows || []).filter(function (p) {
+      if (p.board_closed) { return false; }
       return !A.blockers.some(function (b) { return String(b.ref) === String(p.ref); });
     });
     var shown = A.blockers.concat(others);
@@ -1744,10 +1939,20 @@ _TEMPLATE = r"""<!DOCTYPE html>
     }
     var head = document.getElementById("apertura-head");
     head.textContent = "";
-    stat(head, NUM.format(A.blockers.length), "bloqueantes de apertura abiertos",
-      A.blockers.length > 0);
+    // El rotulo nombra la autoridad, no la hoja: estos son los renglones que el
+    // consejo NO confirmo cerrados. Es el conteo que el panel publica, y es el
+    // que no se mueve porque alguien edite la columna Estatus.
+    var AU = A.authority || {};
+    stat(head, NUM.format(A.blockers.length),
+      "bloqueantes abiertos: sin confirmacion del responsable", A.blockers.length > 0);
+    stat(head, NUM.format((AU.closed_refs || []).length) + " de " + NUM.format(AU.items || 0),
+      "cerrados por confirmacion del consejo (tarjeta del " +
+      (AU.resolved_label || "") + ")", false);
+    // La hoja se sigue publicando, pero rotulada como lo que es: evidencia. Su
+    // conteo y el de arriba no tienen por que coincidir, y cuando coinciden no
+    // prueban nada (BOS-202: el mismo titular con 4 de 10 renglones mal).
     stat(head, NUM.format(A.source.pending) + " de " + NUM.format(A.source.rows),
-      "renglones «Pendiente» en la hoja de seguimiento", false);
+      "renglones «Pendiente» en la hoja (evidencia, no autoridad)", false);
     // El numero que predice el cierre: en el corte del 04/10 los 19 renglones de
     // la hoja con responsable con nombre estaban los 19 entregados, y los 19 sin
     // nombre seguian abiertos salvo uno. Se cuenta, no se escribe.
@@ -1782,6 +1987,17 @@ _TEMPLATE = r"""<!DOCTYPE html>
       if (item.note) { bits.push(item.note); }
       if (item.issue) { bits.push("tarea " + item.issue); }
       if (bits.length) { what.appendChild(el("span", "meta", bits.join(" · "))); }
+      // Lo que dice la hoja va en su propio chip y no en la meta: cuando dice
+      // `Entregado` sobre un renglon que el consejo cuenta abierto, esa sola
+      // linea es la que separa «ya esta» de «falta que lo confirme Said». Es el
+      // renglon que antes no se dibujaba (BOS-202).
+      if (item.sheet_label) {
+        what.appendChild(el("span", "sheet" + (item.sheet_conflict ? " conflict" : ""),
+          item.sheet_label));
+      }
+      if (item.board_closed_label) {
+        what.appendChild(el("span", "sheet done", item.board_closed_label));
+      }
       // El responsable va en su propio renglon, no mezclado con el resto de la
       // meta: es el dato que predice el cierre y es lo que se busca al leer la
       // lista. Los rotulos los calcula `_normalize_owner`; aqui solo se
@@ -1814,7 +2030,17 @@ _TEMPLATE = r"""<!DOCTYPE html>
     document.getElementById("apertura-rest-title").textContent =
       (A.pending_title || "El resto de los pendientes") +
       " (" + NUM.format(others.length) + ")";
-    document.getElementById("apertura-rest-hint").textContent = A.pending_hint || "";
+    // Los que el consejo confirmo cerrados salieron de la lista, y el panel dice
+    // cuales: una lista mas corta sin explicacion se lee como que la hoja
+    // cambio. La frase se arma del dato, no se escribe en el JSON.
+    var hint = A.pending_hint || "";
+    var cerrados = (AU.closed_in_sheet || []);
+    if (cerrados.length) {
+      hint += (hint ? " " : "") + "No se dibujan " + NUM.format(cerrados.length) +
+        " renglones que la hoja sigue marcando «Pendiente» (" + cerrados.join(", ") +
+        "): el consejo los confirmo cerrados el " + (AU.resolved_label || "") + ".";
+    }
+    document.getElementById("apertura-rest-hint").textContent = hint;
     var list = document.getElementById("apertura-pending");
     list.textContent = "";
     others.forEach(function (p) { list.appendChild(row(p, false)); });

@@ -125,6 +125,38 @@ def test_una_cancelada_no_se_escribe():
     assert result["skipped_reasons"] == {"no_cobrada:reversed": 1}
 
 
+def test_cuenta_los_cobros_que_contesto_clip_aunque_no_inserte_ninguno():
+    """`rows_seen` es lo que distingue "pregunte y no habia" de "no pregunte".
+
+    Se cuenta en la frontera de la API, antes de decidir nada, asi que no se
+    mueve cuando una reimportacion salta todo (BOS-232).
+    """
+    sales = FakeSales()
+    load_branch(sales, rows=rows(payment()), commit=True, **ARGS)
+
+    segunda = load_branch(sales, rows=rows(payment()), commit=True, **ARGS)
+    assert segunda["inserted"] == 0
+    assert segunda["rows_seen"] == 1
+
+
+def test_los_cobros_vistos_incluyen_lo_saltado_y_lo_rechazado():
+    result = load_branch(FakeSales(), rows=rows(payment(), payment(id="txn_002",
+                                                                  status="cancelled")),
+                         commit=False, **ARGS)
+
+    assert result["rows_seen"] == 2
+    assert result["to_insert"] == 1
+    assert result["skipped"] == 1
+
+
+def test_un_dia_sin_cobros_reporta_cero_vistos_no_la_ausencia_del_campo():
+    """Un cero medido tiene que ser un cero legible, no un campo que falta."""
+    result = load_branch(FakeSales(), rows=[], commit=True, **ARGS)
+
+    assert result["rows_seen"] == 0
+    assert result["inserted"] == 0
+
+
 def test_el_resultado_declara_que_falta_el_efectivo():
     result = load_branch(FakeSales(), rows=rows(payment()), commit=False, **ARGS)
     assert result["cash_coverage"]["includes_cash"] is False

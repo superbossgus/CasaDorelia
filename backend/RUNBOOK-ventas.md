@@ -339,6 +339,39 @@ alguna fallo, y `db_rows` dice cuantos renglones quedaron en la base: **cero con
 `ok: true` significa "no cobro con tarjeta ese dia", que es distinto de "no
 corrio"**.
 
+### `seen`: la prueba de que Clip contesto (BOS-232)
+
+`db_rows: 0` sostiene la frase de arriba solo si ya se sabe que la carga corrio.
+Visto desde la base no se sabe: **"pregunte y no habia nada" y "nunca pregunte"
+son identicos** en `inserted`, en `db_rows` y en `max(imported_at)`, porque los
+tres cuentan *inserts*, no *consultas*. Esa ambiguedad se cobro el corte del
+12/10/2026, donde la corrida pidio un domingo cerrado y un lunes antes de abrir
+y las cuatro celdas sucursal x dia dieron cero.
+
+Lo que la deshace es `seen` — **cobros vistos**: cuantos renglones devolvio la
+API de Clip para esa celda, insertados o no. Sale de `rows_seen` en
+`clip_load.load_branch`, contado en la frontera de la API antes de decidir nada,
+asi que no se mueve cuando una reimportacion salta todo. Por eso un dia
+reimportado (`inserted: 0`, `skipped_reasons: {"ya_importada": 5}`) **si** es un
+control positivo de que la credencial y la ruta de consulta funcionan.
+
+En el JSON de `run_days`:
+
+| campo | que dice |
+| --- | --- |
+| `days[].branches[].seen` | cobros vistos de esa celda. `null` si la celda fallo: no se sabe cuantos habia, y un `0` lo leeria como medido |
+| `days[].seen_total` | del dia, sumando solo las sucursales que contestaron |
+| `seen_total` | de toda la corrida |
+| `skipped_reasons_total` | el desglose junto (`ya_importada`, `no_cobrada:*`, `repetida_en_el_lote`) |
+| `clip_answered_empty` | `true` solo si **todas** las celdas contestaron y ninguna traia un cobro. Con una credencial caida es `false`: ese cero ya no es medido, y `failed` es quien lo dice |
+
+El comando imprime, despues del JSON, el **comentario de cierre ya armado**
+(`render_comment`): una fila por sucursal x dia con los cobros vistos y el
+desglose de saltos, y la frase explicita cuando la corrida no obtuvo ni un
+renglon. **Pegalo tal cual** en la tarea de la corrida; es la unica evidencia de
+que la consulta se hizo. Ojo con la columna `bruto nuevo`: es solo lo que esa
+corrida insertaria, asi que un dia ya cargado da `$0.00` con cobros vistos > 0.
+
 Quien lo dispara: la rutina de Paperclip *Carga de ventas de Clip a casa_dorelia*
 (`03f5e143`), con dos horarios en `America/Mexico_City` — `45 7 * * *` y
 `45 19 * * *`, 15 min antes de cada corte del reporte de apertura (`0 8` y

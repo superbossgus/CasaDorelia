@@ -113,6 +113,7 @@ def load_branch(sales: Any, *, branch: str, start: datetime, end: datetime,
     """
     if rows is None:
         rows = fetch_rows(load_credentials(branch), start, end, **fetch_kwargs)
+    rows = list(rows)
 
     if brand is None:
         brand = brand_for(cafeteria_id)
@@ -131,6 +132,13 @@ def load_branch(sales: Any, *, branch: str, start: datetime, end: datetime,
         "cafeteria_id": cafeteria_id,
         "brand": brand,
         "committed": bool(commit),
+        # Cuantos cobros contesto Clip, contados donde llegan y antes de decidir
+        # nada con ellos. Es el unico dato que distingue "pregunte y no habia
+        # nada" de "nunca pregunte": `inserted`, `db_rows` y `max(imported_at)`
+        # dan cero en los dos casos (BOS-232). Equivale a
+        # `to_insert + skipped + len(rejected)`, pero se mide en la frontera de
+        # la API, asi que no depende de como se contabilice el plan.
+        "rows_seen": len(rows),
         "inserted": inserted,
         "to_insert": len(plan.documents),
         "skipped": len(plan.skipped),

@@ -15,6 +15,7 @@ from clip_api import ClipAuthError  # noqa: E402
 from clip_daily import (  # noqa: E402
     days_to_load,
     main,
+    render_comment,
     run_daily,
     run_days,
     target_business_date,
@@ -38,13 +39,18 @@ class FakeSales:
         return self.counts.get((query.get("cafeteria_id"), query.get("business_date")), 0)
 
 
-def fake_loader(calls, *, inserted=1, fails=()):
+def fake_loader(calls, *, inserted=1, fails=(), skipped=0, skipped_reasons=None,
+                rows_seen=None):
     def loader(sales, **kwargs):
         calls.append(kwargs)
         if kwargs["branch"] in fails:
             raise ClipAuthError(f"Clip rechazo la credencial de {kwargs['branch']} con 401")
-        return {"inserted": inserted, "to_insert": inserted, "skipped": 0,
-                "skipped_reasons": {}, "gross_total": 100.0 * inserted}
+        loaded = {"inserted": inserted, "to_insert": inserted, "skipped": skipped,
+                  "skipped_reasons": skipped_reasons or {},
+                  "gross_total": 100.0 * inserted}
+        if rows_seen is not None:
+            loaded["rows_seen"] = rows_seen
+        return loaded
     return loader
 
 
@@ -241,3 +247,141 @@ def test_siempre_declara_que_falta_el_efectivo():
     result = run_daily(FakeSales(), day="2026-10-01", branches=BRANCHES,
                        loader=fake_loader([]))
     assert result["includes_cash"] is False
+
+
+# --------------------------------------------------------------------------
+# Cobros vistos: la prueba de que Clip contesto, insertara o no (BOS-232)
+# --------------------------------------------------------------------------
+
+def test_un_dia_reimportado_inserta_cero_y_AUN_ASI_prueba_que_clip_contesto():
+    """El control positivo que el comentario perdia.
+
+    `--catch-up 1` sobre un dia ya cargado inserta 0 y deja `db_rows` igual:
+    identico a una corrida que nunca pregunto. Lo que los separa es que Clip
+    devolvio 5 renglones y los 5 se saltaron por `ya_importada`.
+    """
+    result = run_daily(FakeSales(counts={("c-sji", "2026-10-01"): 5}), day="2026-10-01",
+                       commit=True, branches=BRANCHES[:1],
+                       loader=fake_loader([], inserted=0, skipped=5,
+                                          skipped_reasons={"ya_importada": 5},
+                                          rows_seen=5))
+
+    sji = result["branches"][0]
+    assert sji["inserted"] == 0           # no se escribio nada
+    assert sji["seen"] == 5               # y aun asi Clip contesto con contenido
+    assert sji["skipped_reasons"] == {"ya_importada": 5}
+    assert result["seen_total"] == 5
+
+
+def test_los_cobros_vistos_salen_de_la_frontera_de_la_api_no_de_la_suma():
+    """`rows_seen` manda: lo cuenta el cargador donde llegan las filas."""
+    result = run_daily(FakeSales(), day="2026-10-01", branches=BRANCHES[:1],
+                       loader=fake_loader([], inserted=2, skipped=1, rows_seen=7))
+
+    assert result["branches"][0]["seen"] == 7  # 7, no 3: hubo 4 rechazadas
+
+
+def test_sin_rows_seen_los_cobros_vistos_caen_a_insertables_mas_saltados():
+    """Un cargador viejo (o un doble) sigue dando una cifra legible."""
+    result = run_daily(FakeSales(), day="2026-10-01", branches=BRANCHES[:1],
+                       loader=fake_loader([], inserted=2, skipped=3))
+
+    assert result["branches"][0]["seen"] == 5
+
+
+def test_una_celda_que_fallo_no_reporta_CERO_cobros_vistos():
+    """`None`, no 0: no se sabe cuantos habia. Un 0 mentiria."""
+    result = run_daily(FakeSales(), day="2026-10-01", branches=BRANCHES,
+                       loader=fake_loader([], fails=("sji",)))
+
+    sji, tecno = result["branches"]
+    assert sji["seen"] is None
+    assert tecno["seen"] == 1
+    assert result["seen_total"] == 1  # solo suma lo que contesto
+
+
+def test_run_days_dice_con_un_booleano_que_clip_contesto_vacio():
+    """El caso del 12/10: domingo cerrado + dia en curso antes de abrir."""
+    result = run_days(FakeSales(), days=["2026-10-11", "2026-10-12"], commit=True,
+                      branches=BRANCHES, loader=fake_loader([], inserted=0, rows_seen=0))
+
+    assert result["seen_total"] == 0
+    assert result["clip_answered_empty"] is True
+    assert result["days_requested"] == ["2026-10-11", "2026-10-12"]
+    assert result["ok"] is True  # contestar vacio no es una falla
+
+
+def test_un_solo_cobro_en_cualquier_celda_basta_para_el_control_positivo():
+    sales = FakeSales()
+    result = run_days(sales, days=["2026-10-11", "2026-10-12"], branches=BRANCHES,
+                      loader=fake_loader([], inserted=1, rows_seen=1))
+
+    assert result["seen_total"] == 4
+    assert result["clip_answered_empty"] is False
+
+
+def test_si_NINGUNA_celda_contesto_no_se_declara_que_clip_contesto_vacio():
+    """Cero por credenciales muertas no es cero medido. No se puede confundir."""
+    result = run_days(FakeSales(), days=["2026-10-12"], branches=BRANCHES,
+                      loader=fake_loader([], fails=("sji", "tecnoparque")))
+
+    assert result["seen_total"] == 0
+    assert result["clip_answered_empty"] is False
+    assert result["failed"] == ["2026-10-12:sji", "2026-10-12:tecnoparque"]
+
+
+def test_los_motivos_de_salto_se_suman_de_toda_la_corrida():
+    result = run_days(FakeSales(), days=["2026-10-11", "2026-10-12"], branches=BRANCHES,
+                      loader=fake_loader([], inserted=0, skipped=2,
+                                         skipped_reasons={"ya_importada": 2}, rows_seen=2))
+
+    assert result["skipped_reasons_total"] == {"ya_importada": 8}
+
+
+# --------------------------------------------------------------------------
+# El comentario de cierre, ya armado
+# --------------------------------------------------------------------------
+
+def test_el_comentario_trae_una_fila_por_sucursal_x_dia_con_los_cobros_vistos():
+    result = run_days(FakeSales(counts={("c-sji", "2026-10-11"): 3}),
+                      days=["2026-10-11", "2026-10-12"], commit=True, branches=BRANCHES,
+                      loader=fake_loader([], inserted=0, skipped=3,
+                                         skipped_reasons={"ya_importada": 3}, rows_seen=3))
+
+    comentario = render_comment(result)
+    filas = [l for l in comentario.splitlines() if l.startswith("| 2026-")]
+
+    assert len(filas) == 4  # 2 dias x 2 sucursales
+    assert "cobros vistos" in comentario
+    assert "ya_importada 3" in comentario
+    assert "2026-10-11 | sji (`c-sji`)" in filas[0]
+
+
+def test_el_comentario_DICE_que_no_regreso_ni_un_renglon():
+    """Criterio 2: con todo en cero, el comentario es la unica evidencia."""
+    result = run_days(FakeSales(), days=["2026-10-11", "2026-10-12"], commit=True,
+                      branches=BRANCHES, loader=fake_loader([], inserted=0, rows_seen=0))
+
+    comentario = render_comment(result)
+    assert "no obtuvo ni un renglon de ninguno de los dias pedidos" in comentario
+    assert "unica evidencia" in comentario
+
+
+def test_el_comentario_no_grita_cuando_si_hubo_cobros():
+    result = run_days(FakeSales(), days=["2026-10-12"], commit=True, branches=BRANCHES,
+                      loader=fake_loader([], inserted=3, rows_seen=3))
+
+    comentario = render_comment(result)
+    assert "no obtuvo ni un renglon" not in comentario
+    assert "Cobros vistos en toda la corrida: 6" in comentario
+
+
+def test_el_comentario_separa_la_celda_que_no_contesto_del_cero_medido():
+    result = run_days(FakeSales(), days=["2026-10-12"], commit=True, branches=BRANCHES,
+                      loader=fake_loader([], inserted=0, rows_seen=0, fails=("sji",)))
+
+    comentario = render_comment(result)
+    assert "**no contesto**" in comentario        # la celda de sji
+    assert "2026-10-12:sji" in comentario         # con su error nombrado
+    assert "401" in comentario
+    assert "no obtuvo ni un renglon" not in comentario  # tecno si fue medido

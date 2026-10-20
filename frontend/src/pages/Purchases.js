@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -7,6 +6,8 @@ import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { BranchField, BranchFilter } from "../components/BranchSelect";
+import { apiErrorMessage } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import { Receipt, Plus, Loader2, Trash2 } from "lucide-react";
@@ -14,7 +15,6 @@ import { Receipt, Plus, Loader2, Trash2 } from "lucide-react";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const Purchases = () => {
-  const { isAdmin } = useAuth();
   const [purchases, setPurchases] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
@@ -49,7 +49,7 @@ const Purchases = () => {
       setProducts(productsRes.data);
       setCafeterias(cafeteriasRes.data);
     } catch (error) {
-      toast.error("Error al cargar datos");
+      toast.error(apiErrorMessage(error, "Error al cargar datos"));
     } finally {
       setLoading(false);
     }
@@ -120,21 +120,12 @@ const Purchases = () => {
         </div>
         
         <div className="flex items-center gap-3">
-          {isAdmin() && (
-            <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
-              <SelectTrigger className="w-[180px] bg-[#161616] border-[#27272A] text-white">
-                <SelectValue placeholder="Filtrar por cafetería" />
-              </SelectTrigger>
-              <SelectContent className="bg-[#161616] border-[#27272A]">
-                <SelectItem value="all" className="text-white hover:bg-[#27272A]">Todas</SelectItem>
-                {cafeterias.map((cafe) => (
-                  <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">
-                    {cafe.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <BranchFilter
+            branches={cafeterias}
+            value={selectedCafeteria}
+            onChange={setSelectedCafeteria}
+            testId="purchases-cafeteria-filter"
+          />
           
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -162,19 +153,13 @@ const Purchases = () => {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-[#EDEDED]">Cafetería</Label>
-                    <Select value={formData.cafeteria_id} onValueChange={(v) => setFormData({...formData, cafeteria_id: v})}>
-                      <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
-                        <SelectValue placeholder="Seleccionar" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#161616] border-[#27272A]">
-                        {cafeterias.map((c) => (
-                          <SelectItem key={c.id} value={c.id} className="text-white hover:bg-[#27272A]">{c.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <BranchField
+                    branches={cafeterias}
+                    value={formData.cafeteria_id}
+                    onChange={(v) => setFormData({...formData, cafeteria_id: v})}
+                    placeholder="Seleccionar"
+                    testId="purchases-cafeteria-field"
+                  />
                 </div>
 
                 {/* Add Item */}

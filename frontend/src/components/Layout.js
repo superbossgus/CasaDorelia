@@ -38,6 +38,7 @@ import {
   UserCheck,
   TrendingUp,
   Ticket,
+  Banknote,
 } from "lucide-react";
 import axios from "axios";
 
@@ -96,6 +97,9 @@ const Layout = ({ children }) => {
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin", "gerente", "cajero"] },
     { path: "/sales", label: "Ventas", icon: ShoppingCart, roles: ["admin", "gerente", "cajero"] },
+    // Pegado a Ventas porque es la otra mitad del dinero: Clip trae la tarjeta,
+    // el corte trae el efectivo (BOS-119).
+    { path: "/corte-caja", label: "Corte de Caja", icon: Banknote, roles: ["admin", "gerente", "cajero"] },
     { path: "/inventory", label: "Inv. Productos", icon: Package, roles: ["admin", "gerente", "cajero"] },
     { path: "/ingredient-inventory", label: "Inv. Ingredientes", icon: Boxes, roles: ["admin", "gerente", "cajero"] },
     { path: "/products", label: "Productos", icon: Coffee, roles: ["admin", "gerente"] },

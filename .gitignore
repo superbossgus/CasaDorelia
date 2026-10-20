@@ -97,3 +97,6 @@ frontend/node_modules/.cache/default-development/11.pack
 credentials.json
 *.key
 .credentials
+
+# Tableros generados por backend/dashboard.py: son salida, no fuente.
+dashboard-ventas*.html

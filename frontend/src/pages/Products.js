@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Switch } from "../components/ui/switch";
+import { BranchField } from "../components/BranchSelect";
+import { apiErrorMessage } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import { Coffee, Plus, Pencil, Trash2, Loader2, Image, Download, X, BookOpen, Upload } from "lucide-react";
@@ -262,7 +264,7 @@ const Products = () => {
       toast.success("Catálogo exportado");
       setIsExportDialogOpen(false);
     } catch (error) {
-      toast.error("Error al exportar catálogo");
+      toast.error(apiErrorMessage(error, "Error al exportar catálogo"));
     }
   };
 
@@ -308,19 +310,12 @@ const Products = () => {
                 <DialogTitle className="text-white font-manrope">Exportar Catálogo</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label className="text-[#EDEDED]">Cafetería</Label>
-                  <Select value={exportCafeteria} onValueChange={setExportCafeteria}>
-                    <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
-                      <SelectValue placeholder="Seleccionar cafetería" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-[#161616] border-[#27272A]">
-                      {cafeterias.map((c) => (
-                        <SelectItem key={c.id} value={c.id} className="text-white hover:bg-[#27272A]">{c.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <BranchField
+                  branches={cafeterias}
+                  value={exportCafeteria}
+                  onChange={setExportCafeteria}
+                  testId="products-export-cafeteria-field"
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <Button onClick={() => handleExport('json')} className="bg-[#708238] hover:bg-[#5a692d] text-white">
                     Exportar JSON

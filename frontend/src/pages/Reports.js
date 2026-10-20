@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { BranchFilter } from "../components/BranchSelect";
+import { apiErrorMessage, apiErrorMessageFromBlob } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import { FileText, TrendingUp, DollarSign, ShoppingCart, Store, Download, FileSpreadsheet, Loader2 } from "lucide-react";
@@ -22,7 +23,7 @@ import {
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const Reports = () => {
-  const { isAdmin, token } = useAuth();
+  const { token } = useAuth();
   const [comparison, setComparison] = useState([]);
   const [profitAnalysis, setProfitAnalysis] = useState(null);
   const [cafeterias, setCafeterias] = useState([]);
@@ -58,7 +59,7 @@ const Reports = () => {
       });
       setComparison(response.data);
     } catch (error) {
-      toast.error("Error al cargar reportes");
+      toast.error(apiErrorMessage(error, "Error al cargar reportes"));
     } finally {
       setLoading(false);
     }
@@ -73,6 +74,10 @@ const Reports = () => {
       });
       setProfitAnalysis(response.data);
     } catch (error) {
+      // El 403 por sucursal se tragaba en la consola y la tarjeta de utilidad
+      // se quedaba con el analisis anterior, como si siguiera vigente.
+      setProfitAnalysis(null);
+      toast.error(apiErrorMessage(error, "Error al cargar el análisis de utilidad"));
       console.error("Error fetching profit analysis:", error);
     }
   };
@@ -115,7 +120,7 @@ const Reports = () => {
       
       toast.success(`Reporte ${format.toUpperCase()} descargado`);
     } catch (error) {
-      toast.error("Error al descargar reporte");
+      toast.error(await apiErrorMessageFromBlob(error, "Error al descargar reporte"));
       console.error(error);
     } finally {
       setDownloading(null);
@@ -140,19 +145,14 @@ const Reports = () => {
         </div>
         
         <div className="flex items-center gap-3">
-          {isAdmin() && (
-            <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
-              <SelectTrigger className="w-[180px] bg-[#161616] border-[#27272A] text-white">
-                <SelectValue placeholder="Filtrar análisis" />
-              </SelectTrigger>
-              <SelectContent className="bg-[#161616] border-[#27272A]">
-                <SelectItem value="all" className="text-white hover:bg-[#27272A]">Todas las cafeterías</SelectItem>
-                {cafeterias.map((cafe) => (
-                  <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">{cafe.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <BranchFilter
+            branches={cafeterias}
+            value={selectedCafeteria}
+            onChange={setSelectedCafeteria}
+            allLabel="Todas las cafeterías"
+            placeholder="Filtrar análisis"
+            testId="reports-cafeteria-filter"
+          />
           
           {/* Download Buttons */}
           <div className="flex items-center gap-2">

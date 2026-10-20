@@ -7,6 +7,7 @@ import Landing from "./pages/Landing";
 import CustomerLanding from "./pages/CustomerLanding";
 import Dashboard from "./pages/Dashboard";
 import Sales from "./pages/Sales";
+import CashCut from "./pages/CashCut";
 import Inventory from "./pages/Inventory";
 import Products from "./pages/Products";
 import Ingredients from "./pages/Ingredients";
@@ -129,6 +130,16 @@ const AppRouter = () => {
         </ProtectedRoute>
       } />
       
+      {/* El corte de caja lo captura quien cierra el cajon, asi que el cajero
+          entra: el efectivo no viaja por la API de Clip y sin este corte la
+          venta del dia queda como piso (BOS-119). Corregir un corte ya
+          guardado si es de admin/gerente, y eso lo cuida el backend. */}
+      <Route path="/corte-caja" element={
+        <ProtectedRoute>
+          <Layout><CashCut /></Layout>
+        </ProtectedRoute>
+      } />
+
       <Route path="/inventory" element={
         <ProtectedRoute>
           <Layout><Inventory /></Layout>

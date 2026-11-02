@@ -1,0 +1,10 @@
+# BOS-74: nada de lo que se sube aqui debe entrar al repositorio.
+#
+# Este directorio es almacenamiento de la aplicacion (backend/server.py lo crea
+# con UPLOADS_DIR.mkdir): comprobantes de socios, logos e imagenes de producto.
+# Son datos de personas y del negocio, no codigo.
+#
+# Se ignora todo y se conserva solo este archivo, que ademas garantiza que el
+# directorio exista despues de un clon limpio.
+*
+!.gitignore

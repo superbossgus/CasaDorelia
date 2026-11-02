@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
+import { BranchField, BranchFilter } from "../components/BranchSelect";
+import { apiErrorMessage } from "../lib/apiError";
 import { toast } from "sonner";
 import axios from "axios";
 import { Package, Plus, ArrowUp, ArrowDown, AlertTriangle, Loader2, RefreshCw, Clock } from "lucide-react";
@@ -15,7 +17,7 @@ import { Package, Plus, ArrowUp, ArrowDown, AlertTriangle, Loader2, RefreshCw, C
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const IngredientInventory = () => {
-  const { user, isAdmin, canManage } = useAuth();
+  const { canManage } = useAuth();
   const [inventory, setInventory] = useState([]);
   const [ingredients, setIngredients] = useState([]);
   const [cafeterias, setCafeterias] = useState([]);
@@ -49,7 +51,7 @@ const IngredientInventory = () => {
       setCafeterias(cafeteriasRes.data);
       setAlerts(alertsRes.data);
     } catch (error) {
-      toast.error("Error al cargar inventario");
+      toast.error(apiErrorMessage(error, "Error al cargar inventario"));
     } finally {
       setLoading(false);
     }
@@ -128,21 +130,12 @@ const IngredientInventory = () => {
         </div>
         
         <div className="flex items-center gap-3">
-          {isAdmin() && (
-            <Select value={selectedCafeteria} onValueChange={setSelectedCafeteria}>
-              <SelectTrigger className="w-[180px] bg-[#161616] border-[#27272A] text-white">
-                <SelectValue placeholder="Filtrar por cafetería" />
-              </SelectTrigger>
-              <SelectContent className="bg-[#161616] border-[#27272A]">
-                <SelectItem value="all" className="text-white hover:bg-[#27272A]">Todas</SelectItem>
-                {cafeterias.map((cafe) => (
-                  <SelectItem key={cafe.id} value={cafe.id} className="text-white hover:bg-[#27272A]">
-                    {cafe.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <BranchFilter
+            branches={cafeterias}
+            value={selectedCafeteria}
+            onChange={setSelectedCafeteria}
+            testId="ingredient-inventory-cafeteria-filter"
+          />
           
           {canManage() && (
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
@@ -172,19 +165,12 @@ const IngredientInventory = () => {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-[#EDEDED]">Cafetería</Label>
-                    <Select value={newItem.cafeteria_id} onValueChange={(v) => setNewItem({...newItem, cafeteria_id: v})}>
-                      <SelectTrigger className="bg-[#0D0D0D] border-[#27272A] text-white">
-                        <SelectValue placeholder="Seleccionar cafetería" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#161616] border-[#27272A]">
-                        {cafeterias.map((c) => (
-                          <SelectItem key={c.id} value={c.id} className="text-white hover:bg-[#27272A]">{c.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <BranchField
+                    branches={cafeterias}
+                    value={newItem.cafeteria_id}
+                    onChange={(v) => setNewItem({...newItem, cafeteria_id: v})}
+                    testId="ingredient-inventory-cafeteria-field"
+                  />
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-[#EDEDED]">Cantidad Inicial</Label>
